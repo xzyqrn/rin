@@ -1,0 +1,19 @@
+{
+  "name": "rin-bot",
+  "version": "1.0.0",
+  "description": "Rin — Telegram AI Bot powered by Trinity (OpenRouter)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.13.6",
+    "better-sqlite3": "^12.6.2",
+    "cheerio": "^1.2.0",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "node-cron": "^4.2.1",
+    "openai": "^4.104.0",
+    "telegraf": "^4.16.3"
+  }
+}

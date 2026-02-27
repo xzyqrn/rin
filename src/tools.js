@@ -1,0 +1,579 @@
+'use strict';
+
+const { runCommand }                          = require('./shell');
+const { browseUrl }                           = require('./capabilities/web');
+const { readFile, writeFile, listDirectory,
+        deleteFile, convertFile }             = require('./capabilities/files');
+const { addJob, removeJob }                   = require('./capabilities/cron');
+const { getSystemHealth, getPm2Status,
+        getApiUsage }                         = require('./capabilities/monitoring');
+const { set: storeSet, get: storeGet,
+        del: storeDel, list: storeList }      = require('./capabilities/storage');
+const {
+  addReminder, getPendingReminders, deleteReminder,
+  upsertNote, getNotes, deleteNote,
+  listCronJobs, addHealthCheck, listHealthChecks, deleteHealthCheck,
+} = require('./database');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tool schema definitions
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEF = {
+
+  // ── Available to ALL users ─────────────────────────────────────────────────
+
+  browse_url: {
+    type: 'function',
+    function: {
+      name: 'browse_url',
+      description: 'Fetch a web page and return its readable text content. Use to read articles, docs, or any public URL.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Full URL to fetch (https://...)' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+
+  set_reminder: {
+    type: 'function',
+    function: {
+      name: 'set_reminder',
+      description: 'Schedule a reminder. Provide delay_minutes (e.g. 30) OR datetime (ISO 8601). Not both.',
+      parameters: {
+        type: 'object',
+        properties: {
+          message:       { type: 'string', description: 'What to remind the user about' },
+          delay_minutes: { type: 'number', description: 'Minutes from now' },
+          datetime:      { type: 'string', description: 'Absolute time, e.g. "2026-03-01T15:00:00"' },
+        },
+        required: ['message'],
+      },
+    },
+  },
+
+  list_reminders: {
+    type: 'function',
+    function: {
+      name: 'list_reminders',
+      description: 'List all pending reminders.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
+  delete_reminder: {
+    type: 'function',
+    function: {
+      name: 'delete_reminder',
+      description: 'Cancel a reminder by its ID.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'number' } },
+        required: ['id'],
+      },
+    },
+  },
+
+  save_note: {
+    type: 'function',
+    function: {
+      name: 'save_note',
+      description: 'Save or overwrite a note by title.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title:   { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['title', 'content'],
+      },
+    },
+  },
+
+  get_notes: {
+    type: 'function',
+    function: {
+      name: 'get_notes',
+      description: 'Retrieve notes, optionally filtering by keyword.',
+      parameters: {
+        type: 'object',
+        properties: { search: { type: 'string' } },
+      },
+    },
+  },
+
+  delete_note: {
+    type: 'function',
+    function: {
+      name: 'delete_note',
+      description: 'Delete a note by its exact title.',
+      parameters: {
+        type: 'object',
+        properties: { title: { type: 'string' } },
+        required: ['title'],
+      },
+    },
+  },
+
+  storage_set: {
+    type: 'function',
+    function: {
+      name: 'storage_set',
+      description: 'Persist a key-value pair in local storage. Good for settings, counters, flags.',
+      parameters: {
+        type: 'object',
+        properties: {
+          key:   { type: 'string' },
+          value: { type: 'string' },
+        },
+        required: ['key', 'value'],
+      },
+    },
+  },
+
+  storage_get: {
+    type: 'function',
+    function: {
+      name: 'storage_get',
+      description: 'Retrieve a value from local storage by key.',
+      parameters: {
+        type: 'object',
+        properties: { key: { type: 'string' } },
+        required: ['key'],
+      },
+    },
+  },
+
+  storage_delete: {
+    type: 'function',
+    function: {
+      name: 'storage_delete',
+      description: 'Remove a key from local storage.',
+      parameters: {
+        type: 'object',
+        properties: { key: { type: 'string' } },
+        required: ['key'],
+      },
+    },
+  },
+
+  storage_list: {
+    type: 'function',
+    function: {
+      name: 'storage_list',
+      description: 'List all keys and values in local storage.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
+  // ── Admin only ─────────────────────────────────────────────────────────────
+
+  run_command: {
+    type: 'function',
+    function: {
+      name: 'run_command',
+      description: 'Execute a bash command on the VPS. Use for system admin tasks: processes, services, logs, disk, etc.',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string', description: 'bash -c command' } },
+        required: ['command'],
+      },
+    },
+  },
+
+  read_file: {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: 'Read the contents of a file.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: 'Absolute or relative file path' } },
+        required: ['path'],
+      },
+    },
+  },
+
+  write_file: {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: 'Write or overwrite a file with given content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path:    { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+
+  list_directory: {
+    type: 'function',
+    function: {
+      name: 'list_directory',
+      description: 'List the contents of a directory.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: 'Directory path (default: current dir)' } },
+      },
+    },
+  },
+
+  delete_file: {
+    type: 'function',
+    function: {
+      name: 'delete_file',
+      description: 'Delete a file at the given path.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+      },
+    },
+  },
+
+  convert_file: {
+    type: 'function',
+    function: {
+      name: 'convert_file',
+      description: 'Convert a file between formats. Supported: csv↔json.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path:   { type: 'string' },
+          format: { type: 'string', description: 'Target format, e.g. "json" or "csv"' },
+        },
+        required: ['path', 'format'],
+      },
+    },
+  },
+
+  system_health: {
+    type: 'function',
+    function: {
+      name: 'system_health',
+      description: 'Get a summary of CPU, memory, disk usage, load averages, and uptime.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
+  pm2_status: {
+    type: 'function',
+    function: {
+      name: 'pm2_status',
+      description: 'Get the status of all PM2-managed processes.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
+  api_usage: {
+    type: 'function',
+    function: {
+      name: 'api_usage',
+      description: 'Show API token usage and call count for the last N days.',
+      parameters: {
+        type: 'object',
+        properties: { days: { type: 'number', description: 'Number of days to look back (default 7)' } },
+      },
+    },
+  },
+
+  create_cron: {
+    type: 'function',
+    function: {
+      name: 'create_cron',
+      description: 'Schedule a recurring cron job. Actions: "message" (send text), "command" (run shell cmd), "health_check" (check URL).',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:     { type: 'string', description: 'Unique name for this job' },
+          schedule: { type: 'string', description: 'Cron expression, e.g. "0 9 * * *" for 9am UTC daily' },
+          action:   { type: 'string', enum: ['message', 'command', 'health_check'] },
+          payload:  { type: 'object', description: 'For message: {message}. For command: {command}. For health_check: {url}.' },
+        },
+        required: ['name', 'schedule', 'action', 'payload'],
+      },
+    },
+  },
+
+  list_crons: {
+    type: 'function',
+    function: {
+      name: 'list_crons',
+      description: 'List all scheduled cron jobs.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
+  delete_cron: {
+    type: 'function',
+    function: {
+      name: 'delete_cron',
+      description: 'Delete a cron job by name.',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      },
+    },
+  },
+
+  add_health_check: {
+    type: 'function',
+    function: {
+      name: 'add_health_check',
+      description: 'Register a URL to monitor. Alerts you if it goes down.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:             { type: 'string' },
+          url:              { type: 'string' },
+          interval_minutes: { type: 'number', description: 'Check frequency in minutes (default 5)' },
+        },
+        required: ['name', 'url'],
+      },
+    },
+  },
+
+  list_health_checks: {
+    type: 'function',
+    function: {
+      name: 'list_health_checks',
+      description: 'List all registered health checks and their last known status.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
+  remove_health_check: {
+    type: 'function',
+    function: {
+      name: 'remove_health_check',
+      description: 'Remove a health check by name.',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      },
+    },
+  },
+
+  create_webhook: {
+    type: 'function',
+    function: {
+      name: 'create_webhook',
+      description: 'Create a webhook endpoint. Returns a secret URL that, when POSTed to, forwards the payload here.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:        { type: 'string' },
+          description: { type: 'string' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+
+  list_webhooks: {
+    type: 'function',
+    function: {
+      name: 'list_webhooks',
+      description: 'List all webhook endpoints and their URLs.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
+  delete_webhook: {
+    type: 'function',
+    function: {
+      name: 'delete_webhook',
+      description: 'Delete a webhook endpoint by name.',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      },
+    },
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Executor factory
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @param {object} db
+ * @param {number} userId
+ * @param {object} opts
+ * @param {boolean} opts.admin - include admin-only tools (shell, files, cron, monitoring)
+ * @param {object}  opts.webhookService - { addWebhook, removeWebhook, listWebhooks } from webhook.js
+ */
+function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
+  const ALL_USER_KEYS = [
+    'browse_url',
+    'set_reminder', 'list_reminders', 'delete_reminder',
+    'save_note', 'get_notes', 'delete_note',
+    'storage_set', 'storage_get', 'storage_delete', 'storage_list',
+  ];
+
+  const ADMIN_KEYS = [
+    'run_command',
+    'read_file', 'write_file', 'list_directory', 'delete_file', 'convert_file',
+    'system_health', 'pm2_status', 'api_usage',
+    'create_cron', 'list_crons', 'delete_cron',
+    'add_health_check', 'list_health_checks', 'remove_health_check',
+    'create_webhook', 'list_webhooks', 'delete_webhook',
+  ];
+
+  const keys = admin ? [...ALL_USER_KEYS, ...ADMIN_KEYS] : ALL_USER_KEYS;
+  const definitions = keys.map((k) => DEF[k]);
+
+  async function executor(toolName, args) {
+    switch (toolName) {
+
+      // ── Web ───────────────────────────────────────────────────────────────
+      case 'browse_url': {
+        const r = await browseUrl(args.url);
+        if (r.error) return `Error: ${r.error}`;
+        return `Title: ${r.title}\n\n${r.text}`;
+      }
+
+      // ── Reminders ─────────────────────────────────────────────────────────
+      case 'set_reminder': {
+        let fireAt;
+        if (args.datetime) {
+          fireAt = Math.floor(new Date(args.datetime).getTime() / 1000);
+        } else {
+          fireAt = Math.floor(Date.now() / 1000) + Math.max(1, Number(args.delay_minutes) || 1) * 60;
+        }
+        if (!fireAt || isNaN(fireAt)) return 'Could not parse the time — please try again.';
+        if (fireAt <= Math.floor(Date.now() / 1000)) return 'That time is in the past.';
+        const id = addReminder(db, userId, args.message, fireAt);
+        return `Reminder #${id} set for ${new Date(fireAt * 1000).toLocaleString()}: "${args.message}"`;
+      }
+
+      case 'list_reminders': {
+        const rows = getPendingReminders(db, userId);
+        if (!rows.length) return 'No pending reminders.';
+        return rows.map((r) => `#${r.id} — "${r.message}" at ${new Date(r.fire_at * 1000).toLocaleString()}`).join('\n');
+      }
+
+      case 'delete_reminder': {
+        const ok = deleteReminder(db, userId, Number(args.id));
+        return ok ? `Reminder #${args.id} cancelled.` : `No reminder with ID ${args.id}.`;
+      }
+
+      // ── Notes ──────────────────────────────────────────────────────────────
+      case 'save_note': {
+        upsertNote(db, userId, args.title, args.content);
+        return `Note "${args.title}" saved.`;
+      }
+
+      case 'get_notes': {
+        const rows = getNotes(db, userId, args.search || null);
+        if (!rows.length) return args.search ? `No notes matching "${args.search}".` : 'No notes yet.';
+        return rows.map((n) => `[${n.title}]\n${n.content}`).join('\n\n---\n\n');
+      }
+
+      case 'delete_note': {
+        const ok = deleteNote(db, userId, args.title);
+        return ok ? `Note "${args.title}" deleted.` : `No note titled "${args.title}".`;
+      }
+
+      // ── Storage ───────────────────────────────────────────────────────────
+      case 'storage_set':    return storeSet(db, userId, args.key, args.value);
+      case 'storage_get':    return storeGet(db, userId, args.key);
+      case 'storage_delete': return storeDel(db, userId, args.key);
+      case 'storage_list':   return storeList(db, userId);
+
+      // ── Shell ─────────────────────────────────────────────────────────────
+      case 'run_command': {
+        const r = await runCommand(args.command);
+        return r.output;
+      }
+
+      // ── File system ───────────────────────────────────────────────────────
+      case 'read_file':      return readFile(args.path);
+      case 'write_file':     return writeFile(args.path, args.content);
+      case 'list_directory': return listDirectory(args.path || '.');
+      case 'delete_file':    return deleteFile(args.path);
+      case 'convert_file':   return convertFile(args.path, args.format);
+
+      // ── Monitoring ────────────────────────────────────────────────────────
+      case 'system_health': return await getSystemHealth();
+      case 'pm2_status':    return await getPm2Status();
+      case 'api_usage':     return getApiUsage(db, args.days || 7);
+
+      // ── Cron ──────────────────────────────────────────────────────────────
+      case 'create_cron': {
+        const r = addJob(db, userId, args.name, args.schedule, args.action, args.payload);
+        return r.ok ? `Cron job "${args.name}" created (ID ${r.id}).` : `Error: ${r.error}`;
+      }
+
+      case 'list_crons': {
+        const jobs = listCronJobs(db, userId);
+        if (!jobs.length) return 'No cron jobs.';
+        return jobs.map((j) =>
+          `[${j.id}] ${j.name} — ${j.schedule} | action: ${j.action} | ${j.enabled ? 'enabled' : 'disabled'}`
+        ).join('\n');
+      }
+
+      case 'delete_cron': {
+        const ok = removeJob(db, userId, args.name);
+        return ok ? `Cron job "${args.name}" deleted.` : `No cron job named "${args.name}".`;
+      }
+
+      // ── Health checks ──────────────────────────────────────────────────────
+      case 'add_health_check': {
+        addHealthCheck(db, userId, args.name, args.url, args.interval_minutes || 5);
+        return `Health check "${args.name}" added for ${args.url} (every ${args.interval_minutes || 5} min).`;
+      }
+
+      case 'list_health_checks': {
+        const rows = listHealthChecks(db, userId);
+        if (!rows.length) return 'No health checks configured.';
+        return rows.map((h) => {
+          const last = h.last_status ? `last: HTTP ${h.last_status}` : 'never checked';
+          return `[${h.name}] ${h.url} — every ${h.interval_minutes}m — ${last}`;
+        }).join('\n');
+      }
+
+      case 'remove_health_check': {
+        const ok = deleteHealthCheck(db, userId, args.name);
+        return ok ? `Health check "${args.name}" removed.` : `No health check named "${args.name}".`;
+      }
+
+      // ── Webhooks ──────────────────────────────────────────────────────────
+      case 'create_webhook': {
+        if (!webhookService) return 'Webhook server not running.';
+        const { url, token } = webhookService.addWebhook(userId, args.name, args.description || '');
+        return `Webhook "${args.name}" created.\nURL: ${url}\nPOST JSON to that URL and it will appear here.`;
+      }
+
+      case 'list_webhooks': {
+        if (!webhookService) return 'Webhook server not running.';
+        const hooks = webhookService.listWebhooks(userId);
+        if (!hooks.length) return 'No webhooks configured.';
+        return hooks.map((h) => `[${h.name}] ${h.url}${h.description ? ' — ' + h.description : ''}`).join('\n');
+      }
+
+      case 'delete_webhook': {
+        if (!webhookService) return 'Webhook server not running.';
+        const ok = webhookService.removeWebhook(userId, args.name);
+        return ok ? `Webhook "${args.name}" deleted.` : `No webhook named "${args.name}".`;
+      }
+
+      default:
+        return `Unknown tool: ${toolName}`;
+    }
+  }
+
+  return { definitions, executor };
+}
+
+module.exports = { buildTools };

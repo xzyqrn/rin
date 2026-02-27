@@ -1,0 +1,187 @@
+'use strict';
+
+const { Telegraf } = require('telegraf');
+const { SYSTEM_PROMPT, ADMIN_SYSTEM_PROMPT } = require('./personality');
+const { chat, chatWithTools, extractFacts } = require('./llm');
+const { buildTools } = require('./tools');
+const { runCommand } = require('./shell');
+const { checkAndIncrementRateLimit,
+  saveMemory, getRecentMemories,
+  upsertFact, getAllFacts } = require('./database');
+const { downloadTelegramFile, listUserUploads,
+  fmtSize } = require('./capabilities/uploads');
+
+const ADMIN_IDS = (process.env.ADMIN_USER_ID || '')
+  .split(',').map((s) => s.trim()).filter(Boolean).map(Number);
+
+const RATE_LIMIT = parseInt(process.env.RATE_LIMIT_PER_HOUR || '60', 10);
+
+function isAdmin(ctx) { return ADMIN_IDS.includes(ctx.from?.id); }
+
+function buildSystemMessage(facts, admin) {
+  const base = admin ? ADMIN_SYSTEM_PROMPT : SYSTEM_PROMPT;
+  const entries = Object.entries(facts);
+  if (!entries.length) return base;
+  const lines = entries.map(([k, v]) => `  - ${k.replace(/_/g, ' ')}: ${v}`).join('\n');
+  return `${base}\n\n--- What you know about this user ---\n${lines}\n-------------------------------------`;
+}
+
+function buildMessageHistory(memories) {
+  return memories.map((row) => {
+    if (row.content.startsWith('user: ')) return { role: 'user', content: row.content.slice(6) };
+    if (row.content.startsWith('rin: ')) return { role: 'assistant', content: row.content.slice(5) };
+    return { role: 'user', content: row.content };
+  });
+}
+
+async function sendLong(ctx, text) {
+  const LIMIT = 4000;
+  if (text.length <= LIMIT) { await ctx.reply(text); return; }
+  for (let i = 0; i < text.length; i += LIMIT) await ctx.reply(text.slice(i, i + LIMIT));
+}
+
+/**
+ * @param {object} db
+ * @param {object} opts
+ * @param {object} opts.webhookRef - mutable ref: { current: webhookService | null }
+ *   Populated after bot.launch() when the webhook server starts.
+ */
+function createBot(db, { webhookRef = null } = {}) {
+  const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+
+  // ── /start ─────────────────────────────────────────────────────────────────
+  bot.start((ctx) => {
+    const admin = isAdmin(ctx);
+    const suffix = admin ? ' I have shell, file, and monitoring access on this server too.' : '';
+    ctx.reply(`Hey, I'm Rin. Nice to meet you. What's on your mind?${suffix}`);
+  });
+
+  // ── /myfiles — list the user's uploaded files ──────────────────────────────
+  bot.command('myfiles', (ctx) => {
+    const userId = ctx.from.id;
+    const files = listUserUploads(userId);
+    if (!files.length) return ctx.reply('You haven\'t uploaded any files yet. Just send me a file!');
+    const lines = files.slice(0, 50).map((f, i) =>
+      `${i + 1}. ${f.name} (${fmtSize(f.size)}) — ${f.mtime.toLocaleString()}`
+    );
+    return ctx.reply(`📁 Your uploads (${files.length} file${files.length !== 1 ? 's' : ''}):\n\n${lines.join('\n')}`);
+  });
+
+  // ── Shared file-receive helper ─────────────────────────────────────────────
+  async function handleFileMessage(ctx, fileId, originalName, label) {
+    const userId = ctx.from.id;
+    try {
+      await ctx.reply(`📥 Receiving your ${label}…`);
+      const { saveName, fileSize } = await downloadTelegramFile(
+        process.env.TELEGRAM_BOT_TOKEN, fileId, userId, originalName
+      );
+      await ctx.reply(
+        `✅ Saved! \`${saveName}\` (${fmtSize(fileSize)}) is in your folder on the VPS.\n` +
+        `Use /myfiles to see everything you\'ve uploaded.`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (err) {
+      console.error('[uploads] Failed to save file:', err.message || err);
+      await ctx.reply('❌ Sorry, I couldn\'t save that file. Please try again.');
+    }
+  }
+
+  // ── File-type handlers ─────────────────────────────────────────────────────
+  // Document (any file sent as a file/attachment)
+  bot.on('document', (ctx) => {
+    const doc = ctx.message.document;
+    return handleFileMessage(ctx, doc.file_id, doc.file_name, 'file');
+  });
+
+  // Photo (Telegram compresses; we grab highest resolution)
+  bot.on('photo', (ctx) => {
+    const photos = ctx.message.photo;
+    const best = photos[photos.length - 1];  // last = largest
+    return handleFileMessage(ctx, best.file_id, null, 'photo');
+  });
+
+  // Video
+  bot.on('video', (ctx) => {
+    const vid = ctx.message.video;
+    return handleFileMessage(ctx, vid.file_id, vid.file_name || null, 'video');
+  });
+
+  // Audio / music
+  bot.on('audio', (ctx) => {
+    const aud = ctx.message.audio;
+    const name = aud.file_name || (aud.performer ? `${aud.performer} - ${aud.title}` : null);
+    return handleFileMessage(ctx, aud.file_id, name, 'audio file');
+  });
+
+  // Voice message (OGG)
+  bot.on('voice', (ctx) => {
+    return handleFileMessage(ctx, ctx.message.voice.file_id, 'voice_message.ogg', 'voice message');
+  });
+
+  // Video note (circle video)
+  bot.on('video_note', (ctx) => {
+    return handleFileMessage(ctx, ctx.message.video_note.file_id, 'video_note.mp4', 'video note');
+  });
+
+  // ── /shell — admin direct execution ───────────────────────────────────────
+  bot.command('shell', async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply("You don't have permission to do that.");
+    const command = ctx.message.text.replace(/^\/shell\s*/i, '').trim();
+    if (!command) return ctx.reply('Usage: /shell <command>');
+    await ctx.reply(`Running: \`${command}\``, { parse_mode: 'Markdown' });
+    const result = await runCommand(command);
+    await sendLong(ctx, `\`\`\`\n${result.output}\n\`\`\``);
+  });
+
+  // ── /status — quick health summary (admin) ─────────────────────────────────
+  bot.command('status', async (ctx) => {
+    if (!isAdmin(ctx)) return ctx.reply("You don't have permission to do that.");
+    const { getSystemHealth } = require('./capabilities/monitoring');
+    const health = await getSystemHealth();
+    await ctx.reply(health);
+  });
+
+  // ── Main text handler ──────────────────────────────────────────────────────
+  bot.on('text', async (ctx) => {
+    const userMessage = ctx.message.text.trim();
+    if (!userMessage || userMessage.startsWith('/')) return;
+
+    const userId = ctx.from.id;
+    const admin = isAdmin(ctx);
+
+    // Rate limiting (admins are exempt)
+    if (!admin && !checkAndIncrementRateLimit(db, userId, RATE_LIMIT)) {
+      return ctx.reply(`You've reached the rate limit (${RATE_LIMIT} messages/hour). Try again later.`);
+    }
+
+    try {
+      const facts = getAllFacts(db, userId);
+      const memories = getRecentMemories(db, userId, 20);
+
+      const messages = [
+        { role: 'system', content: buildSystemMessage(facts, admin) },
+        ...buildMessageHistory(memories),
+        { role: 'user', content: userMessage },
+      ];
+
+      const tools = buildTools(db, userId, { admin, webhookService: webhookRef?.current ?? null });
+      const reply = await chatWithTools(messages, tools.definitions, tools.executor);
+
+      await sendLong(ctx, reply);
+
+      saveMemory(db, userId, `user: ${userMessage}`);
+      saveMemory(db, userId, `rin: ${reply}`);
+
+      extractFacts(userMessage, reply)
+        .then((newFacts) => { for (const { key, value } of newFacts) upsertFact(db, userId, key, value); })
+        .catch(() => { });
+    } catch (err) {
+      console.error('[bot] Error:', err.message || err);
+      await ctx.reply("Sorry, something went wrong on my end. Try again in a moment.");
+    }
+  });
+
+  return bot;
+}
+
+module.exports = { createBot };
