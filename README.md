@@ -4,6 +4,25 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 
 ---
 
+## Table of Contents
+
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Setup](#setup)
+- [Running on a VPS (Production)](#running-on-a-vps-production)
+- [Reverse Proxy & HTTPS](#reverse-proxy--https)
+- [Tools](#tools)
+- [Commands](#commands)
+- [Usage Examples](#usage-examples)
+- [Background Services](#background-services)
+- [Database](#database)
+- [Environment Variables](#environment-variables)
+- [Security Notes](#security-notes)
+- [License](#license)
+
+---
+
 ## Features
 
 - **Persistent memory** — conversation history and extracted user facts are stored in SQLite and injected into every prompt, so Rin remembers you across restarts
@@ -11,6 +30,7 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 - **Multi-user support** — any number of users can chat simultaneously
 - **Tool-calling** — Rin uses OpenAI-compatible function calling to act, not just talk
 - **Graceful fallback** — if the model doesn't support tool calling, Rin falls back to plain chat seamlessly
+- **File uploads** — send any document, photo, video, audio, or voice message; files are saved to the VPS under a per-user folder with configurable size and quota limits
 - **Rate limiting** — configurable per-hour message cap for non-admin users
 - **API usage tracking** — every LLM call logs token counts to SQLite
 
@@ -50,7 +70,8 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 │       ├── files.js            readFile, writeFile, listDirectory, deleteFile, convertFile
 │       ├── cron.js             node-cron scheduler (loads from DB on startup)
 │       ├── monitoring.js       system health, PM2 status, API usage
-│       └── storage.js          per-user key-value store
+│       ├── storage.js          per-user key-value store
+│       └── uploads.js          Telegram file download, per-user quota enforcement
 ├── data/                       SQLite database (auto-created, git-ignored)
 ├── .env.example
 └── package.json
@@ -120,6 +141,40 @@ pm2 restart rin     # restart
 pm2 stop rin        # stop
 pm2 status          # overview of all processes
 ```
+
+---
+
+## Reverse Proxy & HTTPS
+
+The webhook HTTP server runs on plain HTTP and must be fronted by a reverse proxy with TLS in production. Below are minimal config snippets for the two most common options. After configuring either, set `WEBHOOK_BASE_URL=https://yourdomain.com` in `.env`.
+
+### nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name yourdomain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+    }
+}
+```
+
+### Caddy
+
+```caddyfile
+yourdomain.com {
+    reverse_proxy localhost:3000
+}
+```
+
+Caddy handles TLS certificates automatically.
 
 ---
 
@@ -195,6 +250,16 @@ You:  Hey, do you remember me?
 Rin:  You're Jay, a backend engineer. What's up?
 ```
 
+### Cancelling a request
+
+```
+You:  Write me a detailed essay about the history of the Roman Empire.
+Rin:  [thinking…]
+
+You:  /cancel
+Rin:  Cancelled the current request.
+```
+
 ### Reminders
 
 ```
@@ -214,6 +279,36 @@ Rin:  Note "Deploy checklist" saved.
 You:  What's in my deploy checklist?
 Rin:  [Deploy checklist] run migrations, restart workers, clear cache
 ```
+
+### File uploads
+
+Just send Rin any file directly in the Telegram chat — no command required.
+
+Supported types:
+
+| What you send | How Telegram forwards it |
+|---------------|--------------------------|
+| Any file / attachment | Document |
+| Photo | Photo (highest resolution automatically selected) |
+| Video | Video |
+| Music / audio file | Audio |
+| Voice message | Voice (saved as `voice_message.ogg`) |
+| Circle video | Video note (saved as `video_note.mp4`) |
+
+```
+You:  [sends project.zip]
+Rin:  📥 Receiving your file…
+      ✅ Saved! `project_1719000000000.zip` (1.23 MB) is in your folder on the VPS.
+      Use /myfiles to see everything you've uploaded.
+
+You:  /myfiles
+Rin:  📁 Your uploads (3 files):
+      1. project_1719000000000.zip (1.23 MB) — 6/21/2024, 12:00:00 PM
+      2. screenshot_1718900000000.jpg (245.00 KB) — 6/20/2024, 8:00:00 AM
+      3. notes_1718800000000.txt (4.1 KB) — 6/19/2024, 9:30:00 PM
+```
+
+Files are stored at `<UPLOADS_DIR>/<userId>/` on the VPS. Admins can access them via `read_file` / `list_directory` tools.
 
 ### Web browsing
 
