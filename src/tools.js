@@ -7,11 +7,10 @@ const { readFile, writeFile, listDirectory,
 const { addJob, removeJob }                   = require('./capabilities/cron');
 const { getSystemHealth, getPm2Status,
         getApiUsage }                         = require('./capabilities/monitoring');
-const { set: storeSet, get: storeGet,
-        del: storeDel, list: storeList }      = require('./capabilities/storage');
 const {
   addReminder, getPendingReminders, deleteReminder,
   upsertNote, getNotes, deleteNote,
+  storageSet, storageGet, storageDelete, storageList,
   listCronJobs, addHealthCheck, listHealthChecks, deleteHealthCheck,
 } = require('./database');
 
@@ -486,10 +485,23 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       }
 
       // ── Storage ───────────────────────────────────────────────────────────
-      case 'storage_set':    return storeSet(db, userId, args.key, args.value);
-      case 'storage_get':    return storeGet(db, userId, args.key);
-      case 'storage_delete': return storeDel(db, userId, args.key);
-      case 'storage_list':   return storeList(db, userId);
+      case 'storage_set': {
+        storageSet(db, userId, args.key, args.value);
+        return `Stored: ${args.key} = ${args.value}`;
+      }
+      case 'storage_get': {
+        const val = storageGet(db, userId, args.key);
+        return val !== null ? val : `No value found for key "${args.key}".`;
+      }
+      case 'storage_delete': {
+        const ok = storageDelete(db, userId, args.key);
+        return ok ? `Deleted key "${args.key}".` : `Key "${args.key}" not found.`;
+      }
+      case 'storage_list': {
+        const rows = storageList(db, userId);
+        if (rows.length === 0) return 'Storage is empty.';
+        return rows.map((r) => `${r.key}: ${r.value}`).join('\n');
+      }
 
       // ── Shell ─────────────────────────────────────────────────────────────
       case 'run_command': {

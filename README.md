@@ -24,7 +24,7 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 | Telegram API | [telegraf](https://github.com/telegraf/telegraf) v4 |
 | Database | [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) |
 | LLM Provider | [OpenRouter](https://openrouter.ai) |
-| Model | `arcee-ai/trinity-large-preview:free` |
+| Model | `arcee-ai/trinity-large-preview:free` (configurable via `LLM_MODEL`) |
 | Web scraping | axios + cheerio |
 | Scheduling | node-cron |
 | Webhook server | express |
@@ -40,7 +40,8 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 │   ├── database.js             SQLite schema, migrations, all DB helpers
 │   ├── llm.js                  OpenRouter client, tool-call loop, usage tracking, fact extraction
 │   ├── personality.js          Rin's system prompts (base + admin)
-│   ├── shell.js                Safe shell execution (timeout, output cap)
+│   ├── logger.js               Structured logging helper
+│   ├── shell.js                Safe shell execution (timeout, output cap, denylist)
 │   ├── tools.js                All tool definitions + executor dispatcher
 │   ├── poller.js               Background loops — reminders + health checks
 │   ├── webhook.js              Express webhook server
@@ -172,6 +173,9 @@ Rin uses function calling to take real actions. Tools are split by access level.
 | Command | Who | Description |
 |---------|-----|-------------|
 | `/start` | Everyone | Introduction message |
+| `/help` | Everyone | List available commands and capabilities |
+| `/myfiles` | Everyone | List your uploaded files |
+| `/cancel` | Everyone | Cancel an ongoing LLM request |
 | `/shell <cmd>` | Admins | Execute a shell command directly, bypassing the LLM |
 | `/status` | Admins | Quick system health snapshot (CPU, memory, disk, uptime) |
 
@@ -315,20 +319,30 @@ sqlite> SELECT model, SUM(tokens_in + tokens_out) as total FROM api_metrics GROU
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Bot token from @BotFather |
 | `OPENROUTER_API_KEY` | Yes | — | API key from openrouter.ai |
 | `ADMIN_USER_ID` | Recommended | — | Comma-separated Telegram user IDs with full access |
+| `LLM_MODEL` | No | `arcee-ai/trinity-large-preview:free` | OpenRouter model identifier |
 | `RATE_LIMIT_PER_HOUR` | No | `60` | Max messages per hour for non-admin users |
+| `MEMORY_TURNS` | No | `20` | Number of conversation turns to include as context |
 | `WEBHOOK_PORT` | No | `3000` | Port for the webhook HTTP server |
-| `WEBHOOK_BASE_URL` | No | — | Public base URL for webhook links (e.g. `https://yourdomain.com`) |
+| `WEBHOOK_BASE_URL` | No | — | Public base URL for webhook links (e.g. `https://yourdomain.com`). Must use HTTPS in production via a reverse proxy with TLS. |
 | `ENABLE_WEBHOOKS` | No | `true` | Set to `false` to disable the webhook server entirely |
+| `UPLOADS_DIR` | No | `./uploads` | Directory where user-uploaded files are stored |
+| `MAX_UPLOAD_MB` | No | `50` | Maximum single file upload size in MB |
+| `MAX_USER_QUOTA_MB` | No | `500` | Maximum total storage per user in MB |
+| `SHELL_DENYLIST` | No | `rm -rf /,mkfs,dd if=` | Comma-separated shell command patterns to block |
 
 ---
 
 ## Security Notes
 
 - All admin tools — shell, files, cron, monitoring, webhooks — are gated by `ADMIN_USER_ID`. Non-matching users cannot trigger them.
+- Shell commands are checked against a configurable denylist (`SHELL_DENYLIST`) before execution, and all invocations are logged.
 - Run the bot under a dedicated low-privilege OS user, never as root.
 - Shell commands time out after 30 seconds; output is capped at 3 500 characters.
 - `browse_url` blocks requests to private/loopback addresses (SSRF protection).
 - Webhook tokens are 48-character hex secrets generated with `crypto.randomBytes`.
+- The webhook server runs on plain HTTP; a reverse proxy with TLS (nginx, caddy) is required in production.
+- File uploads are capped at `MAX_UPLOAD_MB` (default 50 MB) per file and `MAX_USER_QUOTA_MB` (default 500 MB) per user.
+- Tool errors are sanitized to strip absolute paths and stack traces before being shown to the LLM.
 - The `data/` directory and `.env` are git-ignored.
 
 ---

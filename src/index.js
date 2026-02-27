@@ -41,5 +41,5 @@ bot.launch().then(() => {
 });
 
 // ── Graceful shutdown ──────────────────────────────────────────────────────────
-process.once('SIGINT',  () => { console.log('[bot] Shutting down…'); bot.stop('SIGINT');  });
-process.once('SIGTERM', () => { console.log('[bot] Shutting down…'); bot.stop('SIGTERM'); });
+process.once('SIGINT',  () => { console.log('[bot] Shutting down…'); bot.stop('SIGINT');  db.close(); });
+process.once('SIGTERM', () => { console.log('[bot] Shutting down…'); bot.stop('SIGTERM'); db.close(); });

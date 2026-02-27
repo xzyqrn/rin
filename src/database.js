@@ -117,10 +117,11 @@ function saveMemory(db, userId, content) {
   db.prepare('INSERT INTO memory (user_id, content) VALUES (?, ?)').run(userId, content);
 }
 
-function getRecentMemories(db, userId, limit = 20) {
+function getRecentMemories(db, userId, limit) {
+  const count = limit || parseInt(process.env.MEMORY_TURNS || '20', 10);
   return db
     .prepare('SELECT content FROM memory WHERE user_id = ? ORDER BY id DESC LIMIT ?')
-    .all(userId, limit)
+    .all(userId, count)
     .reverse();
 }
 

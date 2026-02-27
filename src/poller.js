@@ -6,6 +6,7 @@ const { checkUrl } = require('./capabilities/web');
 
 const REMINDER_INTERVAL_MS     = 30_000;  // 30 s
 const HEALTH_CHECK_INTERVAL_MS = 60_000;  // 60 s
+const RATE_LIMIT_CLEANUP_MS    = 86_400_000; // 24 h
 
 /**
  * Start all background polling loops.
@@ -54,14 +55,26 @@ function startPollers(db, telegram) {
     }
   }
 
+  // ── Rate limit cleanup ─────────────────────────────────────────────────────
+  function cleanupRateLimits() {
+    try {
+      const cutoff = Math.floor(Date.now() / 1000) - 86400 * 7;
+      db.prepare('DELETE FROM rate_limits WHERE window_start < ?').run(cutoff);
+    } catch (err) {
+      console.error('[poller] Rate limit cleanup:', err.message);
+    }
+  }
+
   // Fire immediately on start to catch anything missed while offline
   tickReminders().catch((e)    => console.error('[poller] Reminder init:', e.message));
   tickHealthChecks().catch((e) => console.error('[poller] Health init:', e.message));
+  cleanupRateLimits();
 
   const t1 = setInterval(tickReminders,    REMINDER_INTERVAL_MS);
   const t2 = setInterval(tickHealthChecks, HEALTH_CHECK_INTERVAL_MS);
+  const t3 = setInterval(cleanupRateLimits, RATE_LIMIT_CLEANUP_MS);
 
-  return () => { clearInterval(t1); clearInterval(t2); };
+  return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
 }
 
 // Backwards-compatible alias
