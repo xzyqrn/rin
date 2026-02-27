@@ -15,6 +15,10 @@ const ADMIN_IDS = (process.env.ADMIN_USER_ID || '')
   .split(',').map((s) => s.trim()).filter(Boolean).map(Number);
 
 const RATE_LIMIT = parseInt(process.env.RATE_LIMIT_PER_HOUR || '60', 10);
+const MEMORY_TURNS = parseInt(process.env.MEMORY_TURNS || '20', 10);
+
+// Per-user AbortController map for /cancel support
+const activeRequests = new Map();
 
 function isAdmin(ctx) { return ADMIN_IDS.includes(ctx.from?.id); }
 
@@ -35,9 +39,18 @@ function buildMessageHistory(memories) {
 }
 
 async function sendLong(ctx, text) {
-  const LIMIT = 4000;
+  const LIMIT = 4096;
   if (text.length <= LIMIT) { await ctx.reply(text); return; }
-  for (let i = 0; i < text.length; i += LIMIT) await ctx.reply(text.slice(i, i + LIMIT));
+  let start = 0;
+  while (start < text.length) {
+    let end = start + LIMIT;
+    if (end < text.length) {
+      const lastNewline = text.lastIndexOf('\n', end);
+      if (lastNewline > start) end = lastNewline;
+    }
+    await ctx.reply(text.slice(start, end));
+    start = end;
+  }
 }
 
 /**
@@ -54,6 +67,39 @@ function createBot(db, { webhookRef = null } = {}) {
     const admin = isAdmin(ctx);
     const suffix = admin ? ' I have shell, file, and monitoring access on this server too.' : '';
     ctx.reply(`Hey, I'm Rin. Nice to meet you. What's on your mind?${suffix}`);
+  });
+
+  // ── /help — list available commands and capabilities ───────────────────────
+  bot.command('help', (ctx) => {
+    const admin = isAdmin(ctx);
+    const lines = [
+      "Here's what I can do:\n",
+      '/start — Introduction message',
+      '/help — Show this help message',
+      '/myfiles — List your uploaded files',
+      '/cancel — Cancel an ongoing request',
+    ];
+    if (admin) {
+      lines.push('/shell <cmd> — Execute a shell command directly');
+      lines.push('/status — Quick system health snapshot');
+    }
+    lines.push('\nI can also browse the web, set reminders, save notes, and store key-value data — just ask naturally.');
+    if (admin) {
+      lines.push('As an admin, I can manage cron jobs, health checks, webhooks, files, and monitor the server.');
+    }
+    return ctx.reply(lines.join('\n'));
+  });
+
+  // ── /cancel — abort an ongoing LLM request ────────────────────────────────
+  bot.command('cancel', (ctx) => {
+    const userId = ctx.from.id;
+    const controller = activeRequests.get(userId);
+    if (controller) {
+      controller.abort();
+      activeRequests.delete(userId);
+      return ctx.reply('Cancelled the current request.');
+    }
+    return ctx.reply('Nothing to cancel — no active request.');
   });
 
   // ── /myfiles — list the user's uploaded files ──────────────────────────────
@@ -154,9 +200,13 @@ function createBot(db, { webhookRef = null } = {}) {
       return ctx.reply(`You've reached the rate limit (${RATE_LIMIT} messages/hour). Try again later.`);
     }
 
+    // Set up AbortController for /cancel support
+    const controller = new AbortController();
+    activeRequests.set(userId, controller);
+
     try {
       const facts = getAllFacts(db, userId);
-      const memories = getRecentMemories(db, userId, 20);
+      const memories = getRecentMemories(db, userId, MEMORY_TURNS);
 
       const messages = [
         { role: 'system', content: buildSystemMessage(facts, admin) },
@@ -164,18 +214,33 @@ function createBot(db, { webhookRef = null } = {}) {
         { role: 'user', content: userMessage },
       ];
 
-      const tools = buildTools(db, userId, { admin, webhookService: webhookRef?.current ?? null });
-      const reply = await chatWithTools(messages, tools.definitions, tools.executor);
+      // Typing indicator — re-fire every 4s (Telegram clears it after 5s)
+      await ctx.sendChatAction('typing');
+      const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+
+      let reply;
+      try {
+        const tools = buildTools(db, userId, { admin, webhookService: webhookRef?.current ?? null });
+        reply = await chatWithTools(messages, tools.definitions, tools.executor, { signal: controller.signal });
+      } finally {
+        clearInterval(typingInterval);
+        activeRequests.delete(userId);
+      }
 
       await sendLong(ctx, reply);
 
       saveMemory(db, userId, `user: ${userMessage}`);
       saveMemory(db, userId, `rin: ${reply}`);
 
-      extractFacts(userMessage, reply)
-        .then((newFacts) => { for (const { key, value } of newFacts) upsertFact(db, userId, key, value); })
-        .catch(() => { });
+      // Only extract facts for substantive, non-command messages
+      if (userMessage.length > 20 && !userMessage.startsWith('/')) {
+        extractFacts(userMessage, reply)
+          .then((newFacts) => { for (const { key, value } of newFacts) upsertFact(db, userId, key, value); })
+          .catch(() => { });
+      }
     } catch (err) {
+      activeRequests.delete(userId);
+      if (err.name === 'AbortError') return;
       console.error('[bot] Error:', err.message || err);
       await ctx.reply("Sorry, something went wrong on my end. Try again in a moment.");
     }

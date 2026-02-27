@@ -79,6 +79,10 @@ function startWebhookServer(db, telegram) {
 
   const server = app.listen(port, () => {
     console.log(`[webhook] Server listening on port ${port}`);
+    const baseUrl = process.env.WEBHOOK_BASE_URL || '';
+    if (baseUrl.startsWith('http://')) {
+      console.warn('[webhook] WARNING: WEBHOOK_BASE_URL uses http:// (not https://). A reverse proxy with TLS is strongly recommended.');
+    }
   });
 
   return { app, server, addWebhook, removeWebhook, listWebhooks };

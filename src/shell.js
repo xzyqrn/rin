@@ -8,7 +8,25 @@ const execFileAsync = promisify(execFile);
 const MAX_OUTPUT_CHARS = 3500;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+const DEFAULT_DENYLIST = ['rm -rf /', 'mkfs', 'dd if='];
+const SHELL_DENYLIST = (process.env.SHELL_DENYLIST || DEFAULT_DENYLIST.join(','))
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
 async function runCommand(command, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  // Check denylist
+  const lower = command.toLowerCase();
+  for (const denied of SHELL_DENYLIST) {
+    if (lower.includes(denied.toLowerCase())) {
+      console.warn(`[shell] Blocked denied command: ${command}`);
+      return {
+        success: false,
+        exitCode: null,
+        output: `Command blocked: matches deny pattern "${denied}"`,
+      };
+    }
+  }
+
+  console.log(`[shell] Executing: ${command}`);
   try {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', command], {
       timeout: timeoutMs,

@@ -8,6 +8,9 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.join(process.cwd(), 'uploads');
 
+const MAX_UPLOAD_MB = parseInt(process.env.MAX_UPLOAD_MB || '50', 10);
+const MAX_USER_QUOTA_MB = parseInt(process.env.MAX_USER_QUOTA_MB || '500', 10);
+
 /**
  * Ensures the per-user upload directory exists and returns its path.
  * @param {number|string} userId
@@ -49,6 +52,23 @@ async function downloadTelegramFile(botToken, fileId, userId, originalName) {
 
   const remotePath = fileInfo.result.file_path;            // e.g. "photos/file_123.jpg"
   const fileSize   = fileInfo.result.file_size || 0;
+
+  // ── Size cap check ──────────────────────────────────────────────────────
+  if (fileSize > MAX_UPLOAD_MB * 1024 * 1024) {
+    throw new Error(`File too large (${fmtSize(fileSize)}). Maximum allowed: ${MAX_UPLOAD_MB} MB.`);
+  }
+
+  // ── Per-user disk quota check ─────────────────────────────────────────
+  const quotaCheckDir = path.join(UPLOADS_DIR, String(userId));
+  if (fs.existsSync(quotaCheckDir)) {
+    let totalSize = 0;
+    for (const name of fs.readdirSync(quotaCheckDir)) {
+      try { totalSize += fs.statSync(path.join(quotaCheckDir, name)).size; } catch { /* skip */ }
+    }
+    if (totalSize + fileSize > MAX_USER_QUOTA_MB * 1024 * 1024) {
+      throw new Error(`Upload would exceed your storage quota (${MAX_USER_QUOTA_MB} MB). Use /myfiles to see your uploads.`);
+    }
+  }
 
   // ── 2. Build a safe local filename ────────────────────────────────────────
   const remoteExt  = path.extname(remotePath);

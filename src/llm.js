@@ -2,7 +2,7 @@
 
 const OpenAI = require('openai');
 
-const MODEL = 'arcee-ai/trinity-large-preview:free';
+const MODEL = process.env.LLM_MODEL || 'arcee-ai/trinity-large-preview:free';
 
 const openai = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
@@ -25,8 +25,22 @@ function _trackUsage(completion) {
   } catch { /* non-critical */ }
 }
 
-async function chat(messages) {
-  const completion = await openai.chat.completions.create({ model: MODEL, messages });
+async function _retryCreate(params, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await openai.chat.completions.create(params);
+    } catch (err) {
+      const status = err?.status || err?.response?.status;
+      const isRetryable = (status >= 500 || !status) && !(err?.status === 400);
+      if (!isRetryable || attempt === maxRetries - 1) throw err;
+      const delayMs = attempt === 0 ? 1000 : 3000;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
+async function chat(messages, { signal } = {}) {
+  const completion = await _retryCreate({ model: MODEL, messages, signal });
   _trackUsage(completion);
   return (completion.choices[0].message.content || '').trim();
 }
@@ -38,20 +52,23 @@ async function chat(messages) {
  * @param {Array}    messages
  * @param {Array}    toolDefs   - OpenAI tool definitions
  * @param {Function} executor   - async (toolName, args) => string
+ * @param {object}   [opts]
+ * @param {AbortSignal} [opts.signal] - AbortSignal to cancel the request
  */
-async function chatWithTools(messages, toolDefs, executor) {
-  if (!toolDefs || toolDefs.length === 0) return chat(messages);
+async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
+  if (!toolDefs || toolDefs.length === 0) return chat(messages, { signal });
 
   const MAX_ROUNDS = 6;
   let current = [...messages];
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const completion = await openai.chat.completions.create({
+      const completion = await _retryCreate({
         model: MODEL,
         messages: current,
         tools: toolDefs,
         tool_choice: 'auto',
+        signal,
       });
       _trackUsage(completion);
 
@@ -69,7 +86,10 @@ async function chatWithTools(messages, toolDefs, executor) {
           const args = JSON.parse(tc.function.arguments);
           result = String(await executor(tc.function.name, args));
         } catch (err) {
-          result = `Tool error: ${err.message}`;
+          const sanitized = (err.message || 'unknown error')
+            .replace(/\/[^\s:]+/g, '<path>')
+            .replace(/\n\s+at .+/g, '');
+          result = `Tool error: ${sanitized}`;
         }
         current.push({ role: 'tool', tool_call_id: tc.id, content: result });
       }
@@ -77,14 +97,14 @@ async function chatWithTools(messages, toolDefs, executor) {
 
     // Max rounds hit — ask for plain summary
     current.push({ role: 'user', content: 'Please summarize what you found.' });
-    return await chat(current);
+    return await chat(current, { signal });
   } catch (err) {
     const isToolError =
       err?.status === 400 ||
       /tool|function/i.test(err?.message || '');
     if (isToolError) {
       console.warn('[llm] Tool calling not supported, falling back to plain chat.');
-      return await chat(messages);
+      return await chat(messages, { signal });
     }
     throw err;
   }
