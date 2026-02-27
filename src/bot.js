@@ -16,6 +16,7 @@ const ADMIN_IDS = (process.env.ADMIN_USER_ID || '')
 
 const RATE_LIMIT = parseInt(process.env.RATE_LIMIT_PER_HOUR || '60', 10);
 const MEMORY_TURNS = parseInt(process.env.MEMORY_TURNS || '20', 10);
+const MIN_FACT_EXTRACTION_LENGTH = 20;
 
 // Per-user AbortController map for /cancel support
 const activeRequests = new Map();
@@ -233,7 +234,7 @@ function createBot(db, { webhookRef = null } = {}) {
       saveMemory(db, userId, `rin: ${reply}`);
 
       // Only extract facts for substantive, non-command messages
-      if (userMessage.length > 20 && !userMessage.startsWith('/')) {
+      if (userMessage.length > MIN_FACT_EXTRACTION_LENGTH && !userMessage.startsWith('/')) {
         extractFacts(userMessage, reply)
           .then((newFacts) => { for (const { key, value } of newFacts) upsertFact(db, userId, key, value); })
           .catch(() => { });

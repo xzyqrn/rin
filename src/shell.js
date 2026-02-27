@@ -17,11 +17,11 @@ async function runCommand(command, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const lower = command.toLowerCase();
   for (const denied of SHELL_DENYLIST) {
     if (lower.includes(denied.toLowerCase())) {
-      console.warn(`[shell] Blocked denied command: ${command}`);
+      console.warn('[shell] Blocked denied command:', command);
       return {
         success: false,
         exitCode: null,
-        output: `Command blocked: matches deny pattern "${denied}"`,
+        output: 'Command blocked by security policy.',
       };
     }
   }

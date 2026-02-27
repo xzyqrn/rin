@@ -31,7 +31,7 @@ async function _retryCreate(params, maxRetries = 3) {
       return await openai.chat.completions.create(params);
     } catch (err) {
       const status = err?.status || err?.response?.status;
-      const isRetryable = (status >= 500 || !status) && !(err?.status === 400);
+      const isRetryable = (status >= 500 || !status);
       if (!isRetryable || attempt === maxRetries - 1) throw err;
       const delayMs = attempt === 0 ? 1000 : 3000;
       await new Promise((r) => setTimeout(r, delayMs));
