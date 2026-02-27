@@ -1,6 +1,6 @@
 'use strict';
 
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
@@ -51,7 +51,7 @@ async function downloadTelegramFile(botToken, fileId, userId, originalName) {
   }
 
   const remotePath = fileInfo.result.file_path;            // e.g. "photos/file_123.jpg"
-  const fileSize   = fileInfo.result.file_size || 0;
+  const fileSize = fileInfo.result.file_size || 0;
 
   // ── Size cap check ──────────────────────────────────────────────────────
   if (fileSize > MAX_UPLOAD_MB * 1024 * 1024) {
@@ -71,9 +71,9 @@ async function downloadTelegramFile(botToken, fileId, userId, originalName) {
   }
 
   // ── 2. Build a safe local filename ────────────────────────────────────────
-  const remoteExt  = path.extname(remotePath);
-  const userExt    = originalName ? path.extname(originalName) : '';
-  const ext        = userExt || remoteExt || '';
+  const remoteExt = path.extname(remotePath);
+  const userExt = originalName ? path.extname(originalName) : '';
+  const ext = userExt || remoteExt || '';
 
   let baseName;
   if (originalName) {
@@ -86,9 +86,9 @@ async function downloadTelegramFile(botToken, fileId, userId, originalName) {
   }
 
   const timestamp = Date.now();
-  const saveName  = `${baseName}_${timestamp}${ext}`;
-  const userDir   = getUserDir(userId);
-  const savePath  = path.join(userDir, saveName);
+  const saveName = `${baseName}_${timestamp}${ext}`;
+  const userDir = getUserDir(userId);
+  const savePath = path.join(userDir, saveName);
 
   // ── 3. Stream file to disk ────────────────────────────────────────────────
   const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${remotePath}`;
@@ -98,14 +98,14 @@ async function downloadTelegramFile(botToken, fileId, userId, originalName) {
     https.get(downloadUrl, (res) => {
       if (res.statusCode !== 200) {
         out.close();
-        fs.unlink(savePath, () => {});
+        fs.unlink(savePath, () => { });
         return reject(new Error(`HTTP ${res.statusCode} while downloading file`));
       }
       res.pipe(out);
       out.on('finish', () => out.close(resolve));
-      out.on('error', (err) => { fs.unlink(savePath, () => {}); reject(err); });
-      res.on('error',  (err) => { fs.unlink(savePath, () => {}); reject(err); });
-    }).on('error', (err) => { fs.unlink(savePath, () => {}); reject(err); });
+      out.on('error', (err) => { fs.unlink(savePath, () => { }); reject(err); });
+      res.on('error', (err) => { fs.unlink(savePath, () => { }); reject(err); });
+    }).on('error', (err) => { fs.unlink(savePath, () => { }); reject(err); });
   });
 
   return { savePath, saveName, fileSize };
@@ -134,9 +134,91 @@ function listUserUploads(userId) {
  * @returns {string}
  */
 function fmtSize(bytes) {
-  if (bytes < 1024)        return `${bytes} B`;
+  if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-module.exports = { downloadTelegramFile, listUserUploads, getUserDir, fmtSize, UPLOADS_DIR };
+/**
+ * Sends a file from disk to a Telegram chat via sendDocument.
+ *
+ * @param {string} botToken
+ * @param {number|string} chatId
+ * @param {string} filePath   - Absolute path to the file on disk
+ * @param {string} [caption]  - Optional caption to send with the file
+ * @returns {Promise<void>}
+ */
+async function sendTelegramFile(botToken, chatId, filePath, caption) {
+  const fileName = path.basename(filePath);
+
+  // Build multipart/form-data manually (no external deps needed)
+  const boundary = `----BotBoundary${Date.now()}`;
+  const CRLF = '\r\n';
+
+  // We'll collect the body parts as Buffers
+  const parts = [];
+
+  // chat_id field
+  parts.push(Buffer.from(
+    `--${boundary}${CRLF}` +
+    `Content-Disposition: form-data; name="chat_id"${CRLF}${CRLF}` +
+    `${chatId}${CRLF}`
+  ));
+
+  // caption field (optional)
+  if (caption) {
+    parts.push(Buffer.from(
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="caption"${CRLF}${CRLF}` +
+      `${caption}${CRLF}`
+    ));
+  }
+
+  // document field header (the file data is streamed after)
+  const docHeader = Buffer.from(
+    `--${boundary}${CRLF}` +
+    `Content-Disposition: form-data; name="document"; filename="${fileName}"${CRLF}` +
+    `Content-Type: application/octet-stream${CRLF}${CRLF}`
+  );
+  const closing = Buffer.from(`${CRLF}--${boundary}--${CRLF}`);
+
+  // Read the file into a Buffer so we can compute Content-Length
+  const fileBuffer = fs.readFileSync(filePath);
+
+  const body = Buffer.concat([...parts, docHeader, fileBuffer, closing]);
+
+  await new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.telegram.org',
+      path: `/bot${botToken}/sendDocument`,
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': body.length,
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(raw);
+          if (!parsed.ok) {
+            reject(new Error(`Telegram sendDocument error: ${parsed.description}`));
+          } else {
+            resolve();
+          }
+        } catch {
+          reject(new Error('Failed to parse Telegram sendDocument response'));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+module.exports = { downloadTelegramFile, listUserUploads, getUserDir, fmtSize, UPLOADS_DIR, sendTelegramFile };

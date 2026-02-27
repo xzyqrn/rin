@@ -127,9 +127,9 @@ No explanation, no markdown — just the JSON array.`,
       ],
     });
     _trackUsage(completion);
-    const raw     = (completion.choices[0].message.content || '').trim();
+    const raw = (completion.choices[0].message.content || '').trim();
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    const parsed  = JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
       (item) => item && typeof item.key === 'string' && item.key && typeof item.value === 'string' && item.value

@@ -234,6 +234,9 @@ Rin uses function calling to take real actions. Tools are split by access level.
 | `/shell <cmd>` | Admins | Execute a shell command directly, bypassing the LLM |
 | `/status` | Admins | Quick system health snapshot (CPU, memory, disk, uptime) |
 
+> **Note:** Admin commands are restricted to the Telegram user IDs set in `ADMIN_USER_ID`. Any other user will receive a permission-denied reply.
+
+
 ---
 
 ## Usage Examples

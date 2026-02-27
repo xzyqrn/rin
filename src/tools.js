@@ -1,16 +1,20 @@
 'use strict';
 
-const { runCommand }                          = require('./shell');
-const { browseUrl }                           = require('./capabilities/web');
+const path = require('path');
+const { runCommand } = require('./shell');
+const { browseUrl } = require('./capabilities/web');
 const { readFile, writeFile, listDirectory,
-        deleteFile, convertFile }             = require('./capabilities/files');
-const { addJob, removeJob }                   = require('./capabilities/cron');
+  deleteFile, convertFile } = require('./capabilities/files');
+const { addJob, removeJob } = require('./capabilities/cron');
 const { getSystemHealth, getPm2Status,
-        getApiUsage }                         = require('./capabilities/monitoring');
+  getApiUsage } = require('./capabilities/monitoring');
+const { set: storeSet, get: storeGet,
+  del: storeDel, list: storeList } = require('./capabilities/storage');
+const { sendTelegramFile,
+  UPLOADS_DIR } = require('./capabilities/uploads');
 const {
   addReminder, getPendingReminders, deleteReminder,
   upsertNote, getNotes, deleteNote,
-  storageSet, storageGet, storageDelete, storageList,
   listCronJobs, addHealthCheck, listHealthChecks, deleteHealthCheck,
 } = require('./database');
 
@@ -45,9 +49,9 @@ const DEF = {
       parameters: {
         type: 'object',
         properties: {
-          message:       { type: 'string', description: 'What to remind the user about' },
+          message: { type: 'string', description: 'What to remind the user about' },
           delay_minutes: { type: 'number', description: 'Minutes from now' },
-          datetime:      { type: 'string', description: 'Absolute time, e.g. "2026-03-01T15:00:00"' },
+          datetime: { type: 'string', description: 'Absolute time, e.g. "2026-03-01T15:00:00"' },
         },
         required: ['message'],
       },
@@ -84,7 +88,7 @@ const DEF = {
       parameters: {
         type: 'object',
         properties: {
-          title:   { type: 'string' },
+          title: { type: 'string' },
           content: { type: 'string' },
         },
         required: ['title', 'content'],
@@ -125,7 +129,7 @@ const DEF = {
       parameters: {
         type: 'object',
         properties: {
-          key:   { type: 'string' },
+          key: { type: 'string' },
           value: { type: 'string' },
         },
         required: ['key', 'value'],
@@ -204,7 +208,7 @@ const DEF = {
       parameters: {
         type: 'object',
         properties: {
-          path:    { type: 'string' },
+          path: { type: 'string' },
           content: { type: 'string' },
         },
         required: ['path', 'content'],
@@ -245,7 +249,7 @@ const DEF = {
       parameters: {
         type: 'object',
         properties: {
-          path:   { type: 'string' },
+          path: { type: 'string' },
           format: { type: 'string', description: 'Target format, e.g. "json" or "csv"' },
         },
         required: ['path', 'format'],
@@ -291,10 +295,10 @@ const DEF = {
       parameters: {
         type: 'object',
         properties: {
-          name:     { type: 'string', description: 'Unique name for this job' },
+          name: { type: 'string', description: 'Unique name for this job' },
           schedule: { type: 'string', description: 'Cron expression, e.g. "0 9 * * *" for 9am UTC daily' },
-          action:   { type: 'string', enum: ['message', 'command', 'health_check'] },
-          payload:  { type: 'object', description: 'For message: {message}. For command: {command}. For health_check: {url}.' },
+          action: { type: 'string', enum: ['message', 'command', 'health_check'] },
+          payload: { type: 'object', description: 'For message: {message}. For command: {command}. For health_check: {url}.' },
         },
         required: ['name', 'schedule', 'action', 'payload'],
       },
@@ -331,8 +335,8 @@ const DEF = {
       parameters: {
         type: 'object',
         properties: {
-          name:             { type: 'string' },
-          url:              { type: 'string' },
+          name: { type: 'string' },
+          url: { type: 'string' },
           interval_minutes: { type: 'number', description: 'Check frequency in minutes (default 5)' },
         },
         required: ['name', 'url'],
@@ -370,7 +374,7 @@ const DEF = {
       parameters: {
         type: 'object',
         properties: {
-          name:        { type: 'string' },
+          name: { type: 'string' },
           description: { type: 'string' },
         },
         required: ['name'],
@@ -396,6 +400,25 @@ const DEF = {
         type: 'object',
         properties: { name: { type: 'string' } },
         required: ['name'],
+      },
+    },
+  },
+
+  send_file: {
+    type: 'function',
+    function: {
+      name: 'send_file',
+      description:
+        'Send a file from the VPS directly to the user in this Telegram chat. ' +
+        'Use the filename as it appears in the uploads folder or a full absolute path. ' +
+        'If you only have a filename, it will be looked up in the user\'s uploads directory automatically.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Filename (e.g. report.pdf) or full absolute path to the file on the VPS' },
+          caption: { type: 'string', description: 'Optional caption to include with the file' },
+        },
+        required: ['path'],
       },
     },
   },
@@ -427,6 +450,7 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
     'create_cron', 'list_crons', 'delete_cron',
     'add_health_check', 'list_health_checks', 'remove_health_check',
     'create_webhook', 'list_webhooks', 'delete_webhook',
+    'send_file',
   ];
 
   const keys = admin ? [...ALL_USER_KEYS, ...ADMIN_KEYS] : ALL_USER_KEYS;
@@ -485,23 +509,11 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       }
 
       // ── Storage ───────────────────────────────────────────────────────────
-      case 'storage_set': {
-        storageSet(db, userId, args.key, args.value);
-        return `Stored: ${args.key} = ${args.value}`;
-      }
-      case 'storage_get': {
-        const val = storageGet(db, userId, args.key);
-        return val !== null ? val : `No value found for key "${args.key}".`;
-      }
-      case 'storage_delete': {
-        const ok = storageDelete(db, userId, args.key);
-        return ok ? `Deleted key "${args.key}".` : `Key "${args.key}" not found.`;
-      }
-      case 'storage_list': {
-        const rows = storageList(db, userId);
-        if (rows.length === 0) return 'Storage is empty.';
-        return rows.map((r) => `${r.key}: ${r.value}`).join('\n');
-      }
+      case 'storage_set': return storeSet(db, userId, args.key, args.value);
+      case 'storage_get': return storeGet(db, userId, args.key);
+      case 'storage_delete': return storeDel(db, userId, args.key);
+      case 'storage_list': return storeList(db, userId);
+
 
       // ── Shell ─────────────────────────────────────────────────────────────
       case 'run_command': {
@@ -510,16 +522,16 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       }
 
       // ── File system ───────────────────────────────────────────────────────
-      case 'read_file':      return readFile(args.path);
-      case 'write_file':     return writeFile(args.path, args.content);
+      case 'read_file': return readFile(args.path);
+      case 'write_file': return writeFile(args.path, args.content);
       case 'list_directory': return listDirectory(args.path || '.');
-      case 'delete_file':    return deleteFile(args.path);
-      case 'convert_file':   return convertFile(args.path, args.format);
+      case 'delete_file': return deleteFile(args.path);
+      case 'convert_file': return convertFile(args.path, args.format);
 
       // ── Monitoring ────────────────────────────────────────────────────────
       case 'system_health': return await getSystemHealth();
-      case 'pm2_status':    return await getPm2Status();
-      case 'api_usage':     return getApiUsage(db, args.days || 7);
+      case 'pm2_status': return await getPm2Status();
+      case 'api_usage': return getApiUsage(db, args.days || 7);
 
       // ── Cron ──────────────────────────────────────────────────────────────
       case 'create_cron': {
@@ -578,6 +590,27 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
         if (!webhookService) return 'Webhook server not running.';
         const ok = webhookService.removeWebhook(userId, args.name);
         return ok ? `Webhook "${args.name}" deleted.` : `No webhook named "${args.name}".`;
+      }
+
+      // ── Send file to Telegram ──────────────────────────────────────────────
+      case 'send_file': {
+        // Resolve path: if it's not absolute, search the user's uploads folder
+        let filePath = args.path;
+        if (!path.isAbsolute(filePath)) {
+          filePath = path.join(UPLOADS_DIR, String(userId), filePath);
+        }
+        const chatId = userId; // send back to the same user
+        try {
+          await sendTelegramFile(
+            process.env.TELEGRAM_BOT_TOKEN,
+            chatId,
+            filePath,
+            args.caption || undefined
+          );
+          return `File sent successfully: ${path.basename(filePath)}`;
+        } catch (err) {
+          return `Failed to send file: ${err.message}`;
+        }
       }
 
       default:
