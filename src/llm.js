@@ -46,7 +46,41 @@ async function chat(messages, { signal } = {}) {
 }
 
 /**
- * Chat with tool access. Runs the tool-call loop.
+ * Compress a list of old conversation messages into a single summary string.
+ * Used when the conversation history grows too large.
+ */
+async function summarizeHistory(messages) {
+  const transcript = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => {
+      const speaker = m.role === 'assistant' ? 'Rin' : 'User';
+      const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      return `${speaker}: ${content}`;
+    })
+    .join('\n');
+
+  try {
+    const completion = await _retryCreate({
+      model: MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a memory compressor. Summarise the conversation below into a compact, factual paragraph that preserves the most important context, decisions, and preferences expressed. Write in third-person ("The user said…"). Be concise.',
+        },
+        { role: 'user', content: transcript },
+      ],
+    });
+    _trackUsage(completion);
+    return (completion.choices[0].message.content || '').trim();
+  } catch {
+    return '[Earlier conversation compressed — summary unavailable]';
+  }
+}
+
+/**
+ * Chat with tool access. Runs a ReAct-style loop:
+ * Reason (think/plan) → Act (tool calls) → Observe (tool results) → Repeat.
+ *
  * Falls back to plain chat if the model doesn't support function calling.
  *
  * @param {Array}    messages
@@ -58,8 +92,11 @@ async function chat(messages, { signal } = {}) {
 async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
   if (!toolDefs || toolDefs.length === 0) return chat(messages, { signal });
 
-  const MAX_ROUNDS = 6;
+  const MAX_ROUNDS = 12;
   let current = [...messages];
+
+  // Track the plan if Rin produces one, so we can display progress
+  let activePlan = null;
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -74,29 +111,56 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
 
       const msg = completion.choices[0].message;
 
+      // No more tool calls — we have a final answer
       if (!msg.tool_calls || msg.tool_calls.length === 0) {
-        return (msg.content || '').trim();
+        // If Rin produced a plan but the reply is empty, summarise what was done
+        const content = (msg.content || '').trim();
+        if (!content && activePlan) {
+          return 'Done — all planned steps completed.';
+        }
+        return content;
       }
 
       current.push(msg);
 
       for (const tc of msg.tool_calls) {
+        const toolName = tc.function.name;
         let result;
+
         try {
           const args = JSON.parse(tc.function.arguments);
-          result = String(await executor(tc.function.name, args));
+
+          // ── Meta-cognitive tools: handled internally ──────────────────────
+          if (toolName === 'think') {
+            // Thinking is silent — just acknowledge so the model can continue
+            result = `Thought noted. Continue.`;
+          } else if (toolName === 'plan') {
+            activePlan = args.steps || [];
+            const numbered = activePlan.map((s, i) => `${i + 1}. ${s}`).join('\n');
+            result = `Plan set:\n${numbered}\n\nNow execute each step in order using the available tools.`;
+          } else if (toolName === 'reflect') {
+            if (args.revised_answer && args.revised_answer !== 'null') {
+              // Inject the improved answer as the final content and end the loop
+              return args.revised_answer.trim();
+            }
+            result = 'Reflection complete — original answer is satisfactory.';
+          } else {
+            // ── Real external tools ──────────────────────────────────────────
+            result = String(await executor(toolName, args));
+          }
         } catch (err) {
           const sanitized = (err.message || 'unknown error')
             .replace(/\/[^\s:]+/g, '<path>')
             .replace(/\n\s+at .+/g, '');
           result = `Tool error: ${sanitized}`;
         }
+
         current.push({ role: 'tool', tool_call_id: tc.id, content: result });
       }
     }
 
-    // Max rounds hit — ask for plain summary
-    current.push({ role: 'user', content: 'Please summarize what you found.' });
+    // Max rounds hit — ask for a plain summary of what was accomplished
+    current.push({ role: 'user', content: 'Summarise what you found or did.' });
     return await chat(current, { signal });
   } catch (err) {
     const isToolError =
@@ -139,4 +203,4 @@ No explanation, no markdown — just the JSON array.`,
   }
 }
 
-module.exports = { initLlm, chat, chatWithTools, extractFacts };
+module.exports = { initLlm, chat, chatWithTools, summarizeHistory, extractFacts };

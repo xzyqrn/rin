@@ -172,6 +172,73 @@ const DEF = {
     },
   },
 
+  // ── Meta-cognitive (available to ALL users) ────────────────────────────────
+
+  think: {
+    type: 'function',
+    function: {
+      name: 'think',
+      description:
+        'Private reasoning scratchpad. Use this to think through a complex or ambiguous request ' +
+        'BEFORE acting. Write your current understanding, any unknowns, and your intended next step. ' +
+        'The user does NOT see this — it is only for your own reasoning. ' +
+        'Do not use this for simple or clearly-defined requests.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reasoning: { type: 'string', description: 'Your step-by-step internal reasoning' },
+        },
+        required: ['reasoning'],
+      },
+    },
+  },
+
+  plan: {
+    type: 'function',
+    function: {
+      name: 'plan',
+      description:
+        'Decompose a multi-step goal into an ordered list of concrete actions. ' +
+        'Call this when the user wants something that requires more than one distinct tool call. ' +
+        'Return the plan, then execute each step using the appropriate tools.',
+      parameters: {
+        type: 'object',
+        properties: {
+          goal: { type: 'string', description: 'What the user ultimately wants to achieve' },
+          steps: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Ordered list of concrete actions to take, each referencing a specific tool or action',
+          },
+        },
+        required: ['goal', 'steps'],
+      },
+    },
+  },
+
+  reflect: {
+    type: 'function',
+    function: {
+      name: 'reflect',
+      description:
+        'Review your most recent answer and decide if it fully satisfies the user\'s request. ' +
+        'Use after completing a complex or multi-step task. ' +
+        'If the answer is incomplete or could be improved, provide a revised_answer. ' +
+        'If the answer is already good, set revised_answer to null.',
+      parameters: {
+        type: 'object',
+        properties: {
+          critique: { type: 'string', description: 'A brief evaluation of the answer\'s completeness and accuracy' },
+          revised_answer: {
+            type: 'string',
+            description: 'An improved version of the answer, or null if no revision is needed',
+          },
+        },
+        required: ['critique'],
+      },
+    },
+  },
+
   // ── Admin only ─────────────────────────────────────────────────────────────
 
   run_command: {
@@ -437,6 +504,9 @@ const DEF = {
  */
 function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
   const ALL_USER_KEYS = [
+    // Meta-cognitive tools — always available
+    'think', 'plan', 'reflect',
+    // External tools
     'browse_url',
     'set_reminder', 'list_reminders', 'delete_reminder',
     'save_note', 'get_notes', 'delete_note',

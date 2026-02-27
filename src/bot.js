@@ -2,7 +2,7 @@
 
 const { Telegraf } = require('telegraf');
 const { SYSTEM_PROMPT, ADMIN_SYSTEM_PROMPT } = require('./personality');
-const { chat, chatWithTools, extractFacts } = require('./llm');
+const { chat, chatWithTools, summarizeHistory, extractFacts } = require('./llm');
 const { buildTools } = require('./tools');
 const { runCommand } = require('./shell');
 const { checkAndIncrementRateLimit,
@@ -15,7 +15,9 @@ const ADMIN_IDS = (process.env.ADMIN_USER_ID || '')
   .split(',').map((s) => s.trim()).filter(Boolean).map(Number);
 
 const RATE_LIMIT = parseInt(process.env.RATE_LIMIT_PER_HOUR || '60', 10);
-const MEMORY_TURNS = parseInt(process.env.MEMORY_TURNS || '20', 10);
+const MEMORY_TURNS = parseInt(process.env.MEMORY_TURNS || '30', 10);
+const RECENT_TURNS = 10;          // keep this many turns verbatim
+const COMPRESS_THRESHOLD = 15;    // summarise if older turns exceed this count
 const MIN_FACT_EXTRACTION_LENGTH = 20;
 
 // Per-user AbortController map for /cancel support
@@ -31,12 +33,60 @@ function buildSystemMessage(facts, admin) {
   return `${base}\n\n--- What you know about this user ---\n${lines}\n-------------------------------------`;
 }
 
-function buildMessageHistory(memories) {
-  return memories.map((row) => {
-    if (row.content.startsWith('user: ')) return { role: 'user', content: row.content.slice(6) };
-    if (row.content.startsWith('rin: ')) return { role: 'assistant', content: row.content.slice(5) };
-    return { role: 'user', content: row.content };
-  });
+function _rowToMessage(row) {
+  if (row.content.startsWith('user: ')) return { role: 'user', content: row.content.slice(6) };
+  if (row.content.startsWith('rin: ')) return { role: 'assistant', content: row.content.slice(5) };
+  return { role: 'user', content: row.content };
+}
+
+/**
+ * Build the message history for the LLM.
+ * - Keeps the most recent RECENT_TURNS turns verbatim.
+ * - If there are older turns above COMPRESS_THRESHOLD, compresses them into a
+ *   single summary message (summarized asynchronously on first need).
+ * @param {Array} memories - all stored memory rows (newest last)
+ * @returns {Promise<Array>} resolved message array
+ */
+async function buildMessageHistory(memories) {
+  if (memories.length <= RECENT_TURNS) {
+    return memories.map(_rowToMessage);
+  }
+
+  const olderRows = memories.slice(0, memories.length - RECENT_TURNS);
+  const recentRows = memories.slice(memories.length - RECENT_TURNS);
+  const recentMessages = recentRows.map(_rowToMessage);
+
+  if (olderRows.length < COMPRESS_THRESHOLD) {
+    // Not enough old turns to justify summarisation — include them all verbatim
+    return [...olderRows.map(_rowToMessage), ...recentMessages];
+  }
+
+  // Compress older turns into a summary
+  const olderMessages = olderRows.map(_rowToMessage);
+  const summary = await summarizeHistory(olderMessages);
+  const summaryMessage = {
+    role: 'assistant',
+    content: `[Memory summary of earlier conversation]\n${summary}`,
+  };
+
+  return [summaryMessage, ...recentMessages];
+}
+
+/**
+ * Returns true if the message appears to need multi-step processing.
+ * Used to inject a planning nudge into the system prompt.
+ */
+function isMultiStepRequest(text) {
+  if (text.length < 50) return false;
+  // Keywords that typically imply chained actions
+  const patterns = [
+    /\b(then|after that|and then|followed by|also|next)\b/i,
+    /\b(search|find|look up).{1,60}(save|store|note|remind|send)/i,
+    /\b(get|fetch|check|read).{1,60}(and|then|also)/i,
+    /\bfor each\b/i,
+    /step[s]?:/i,
+  ];
+  return patterns.some((p) => p.test(text));
 }
 
 async function sendLong(ctx, text) {
@@ -209,15 +259,24 @@ function createBot(db, { webhookRef = null } = {}) {
       const facts = getAllFacts(db, userId);
       const memories = getRecentMemories(db, userId, MEMORY_TURNS);
 
+      // Build history (may include a compressed summary of older turns)
+      const historyMessages = await buildMessageHistory(memories);
+
+      // Inject a planning nudge for complex multi-step requests
+      let systemContent = buildSystemMessage(facts, admin);
+      if (isMultiStepRequest(userMessage)) {
+        systemContent += '\n\n[Hint] This request appears to involve multiple steps. Consider using the `think` and `plan` tools before acting.';
+      }
+
       const messages = [
-        { role: 'system', content: buildSystemMessage(facts, admin) },
-        ...buildMessageHistory(memories),
+        { role: 'system', content: systemContent },
+        ...historyMessages,
         { role: 'user', content: userMessage },
       ];
 
       // Typing indicator — re-fire every 4s (Telegram clears it after 5s)
       await ctx.sendChatAction('typing');
-      const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => {}), 4000);
+      const typingInterval = setInterval(() => ctx.sendChatAction('typing').catch(() => { }), 4000);
 
       let reply;
       try {
