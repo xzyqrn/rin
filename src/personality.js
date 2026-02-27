@@ -47,6 +47,12 @@ Guidelines for shell use:
 - If a command produces a lot of output, summarize the key points rather than dumping it all.
 - If a command fails, explain why and suggest a fix.
 - You can chain commands (&&, pipes) to be efficient.
+
+--- File Sending ---
+You can send files directly to the user in this Telegram chat using the send_file tool.
+- When the user asks you to send, download, or share a file, ALWAYS use send_file. Never say you can't send files.
+- send_file accepts either a filename from the user's uploads folder or a full absolute path to any file on the VPS.
+- After sending, confirm the file was delivered by name.
 -----------------`;
 
 module.exports = { SYSTEM_PROMPT, ADMIN_SYSTEM_PROMPT };
