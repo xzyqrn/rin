@@ -210,7 +210,7 @@ function createBot(db, { webhookRef = null } = {}) {
     if (!baseUrl) {
       return ctx.reply('WEBHOOK_BASE_URL is not configured. Ask the administrator to set it up.');
     }
-    const authUrl = `${baseUrl}/auth/google?state=${userId}`;
+    const authUrl = `${baseUrl}/api/auth/google?state=${userId}`;
     return ctx.reply('🔗 Click the button below to securely link your Google account to Rin.', {
       reply_markup: {
         inline_keyboard: [[
