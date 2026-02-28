@@ -214,7 +214,7 @@ function createBot(db, { webhookRef = null } = {}) {
     return ctx.reply('🔗 Click the button below to securely link your Google account to Rin.', {
       reply_markup: {
         inline_keyboard: [[
-          { text: 'Link Google Account', web_app: { url: authUrl } }
+          { text: 'Link Google Account', url: authUrl }
         ]]
       }
     });
