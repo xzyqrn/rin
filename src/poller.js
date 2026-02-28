@@ -59,13 +59,23 @@ function startPollers(db, telegram) {
 
   // ── Rate limit cleanup ─────────────────────────────────────────────────────
   async function cleanupRateLimits() {
+    if (!db) return;
     try {
-      const cutoff = Math.floor(Date.now() / 1000) - 86400 * 7;
-      const snapshot = await db.collection('rate_limits').where('window_start', '<', cutoff).get();
-      if (!snapshot.empty) {
+      const usersSnapshot = await db.collection('users').get();
+      if (usersSnapshot.empty) return;
+      const cutoff = String(Math.floor(Date.now() / 3600000) * 3600 - 86400 * 7);
+      for (const userDoc of usersSnapshot.docs) {
+        const rateLimitsSnapshot = await userDoc.ref.collection('rate_limits').get();
+        if (rateLimitsSnapshot.empty) continue;
         const batch = db.batch();
-        snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-        await batch.commit();
+        let count = 0;
+        rateLimitsSnapshot.docs.forEach((doc) => {
+          if (doc.id < cutoff) {
+            batch.delete(doc.ref);
+            count++;
+          }
+        });
+        if (count > 0) await batch.commit();
       }
     } catch (err) {
       console.error('[poller] Rate limit cleanup:', err.message);

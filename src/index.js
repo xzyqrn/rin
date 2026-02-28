@@ -23,7 +23,11 @@ if (!process.env.GEMINI_API_KEY && !process.env.OPENROUTER_API_KEY) {
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 const db = initDb();
-console.log('[db] Firestore initialized.');
+if (db) {
+  console.log('[db] Firestore initialized.');
+} else {
+  console.warn('[db] Firestore not configured — database features will be disabled.');
+}
 
 initLlm(db);
 
