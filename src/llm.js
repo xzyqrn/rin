@@ -28,10 +28,10 @@ function _trackUsage(completion) {
   } catch { /* non-critical */ }
 }
 
-async function _retryCreate(params, maxRetries = 3) {
+async function _retryCreate(params, options = {}, maxRetries = 3) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      return await openai.chat.completions.create(params);
+      return await openai.chat.completions.create(params, options);
     } catch (err) {
       const status = err?.status || err?.response?.status;
       const isRetryable = (status >= 500 || !status);
@@ -43,7 +43,7 @@ async function _retryCreate(params, maxRetries = 3) {
 }
 
 async function chat(messages, { signal } = {}) {
-  const completion = await _retryCreate({ model: MODEL, messages, signal });
+  const completion = await _retryCreate({ model: MODEL, messages }, { signal });
   _trackUsage(completion);
   return (completion.choices[0].message.content || '').trim();
 }
@@ -73,8 +73,7 @@ async function summarizeHistory(messages, signal) {
         },
         { role: 'user', content: transcript },
       ],
-      signal,
-    });
+    }, { signal });
     _trackUsage(completion);
     const out = (completion.choices[0].message.content || '').trim();
     return out;
@@ -116,8 +115,7 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
         messages: current,
         tools: toolDefs,
         tool_choice: 'auto',
-        signal,
-      });
+      }, { signal });
       _trackUsage(completion);
 
       const msg = completion.choices[0].message;
