@@ -10,23 +10,23 @@ let _telegram = null;
 // Map of cronJob.id → node-cron task
 const _activeTasks = new Map();
 
-function initCron(db, telegram) {
+async function initCron(db, telegram) {
   _db = db;
   _telegram = telegram;
-  loadAll();
+  await loadAll();
 }
 
-function loadAll() {
+async function loadAll() {
   if (!_db) return;
-  const jobs = getAllEnabledCrons(_db);
+  const jobs = await getAllEnabledCrons(_db);
   let loaded = 0;
   for (const job of jobs) {
-    if (_schedule(job)) loaded++;
+    if (await _schedule(job)) loaded++;
   }
   console.log(`[cron] ${loaded} job(s) loaded.`);
 }
 
-function _schedule(job) {
+async function _schedule(job) {
   if (!nodeCron.validate(job.schedule)) {
     console.warn(`[cron] Invalid schedule for job "${job.name}": ${job.schedule}`);
     return false;
@@ -34,7 +34,7 @@ function _schedule(job) {
   _stop(job.id); // replace if already running
 
   const { storageGet } = require('../database');
-  const userTz = storageGet(_db, job.user_id, 'timezone');
+  const userTz = await storageGet(_db, job.user_id, 'timezone');
   const tz = userTz || process.env.TIMEZONE || process.env.TZ || 'System Default';
   const cronTz = tz === 'System Default' ? undefined : tz;
 
@@ -75,25 +75,27 @@ async function _run(job) {
 }
 
 // Public API used by tools.js
-function addJob(db, userId, name, schedule, action, payload) {
+async function addJob(db, userId, name, schedule, action, payload) {
   if (!nodeCron.validate(schedule)) return { ok: false, error: `Invalid cron schedule: "${schedule}"` };
   const { addCronJob } = require('../database');
-  const id = addCronJob(db, userId, name, schedule, action, payload);
+  const id = await addCronJob(db, userId, name, schedule, action, payload);
   // Schedule immediately if cron is initialised
   if (_telegram) {
-    const newJob = db.prepare('SELECT * FROM cron_jobs WHERE id = ?').get(id);
-    if (newJob) _schedule(newJob);
+    const { listCronJobs } = require('../database');
+    const jobs = await listCronJobs(db, userId);
+    const newJob = jobs.find(j => j.id === id || j.id === String(id));
+    if (newJob) await _schedule(newJob);
   }
   return { ok: true, id };
 }
 
-function removeJob(db, userId, name) {
+async function removeJob(db, userId, name) {
   const { listCronJobs, deleteCronJob } = require('../database');
-  const jobs = listCronJobs(db, userId);
+  const jobs = await listCronJobs(db, userId);
   const job = jobs.find((j) => j.name === name);
   if (!job) return false;
   _stop(job.id);
-  return deleteCronJob(db, userId, name);
+  return await deleteCronJob(db, userId, name);
 }
 
 function getActiveCount() { return _activeTasks.size; }

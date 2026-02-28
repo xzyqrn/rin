@@ -221,14 +221,14 @@ function createBot(db, { webhookRef = null } = {}) {
   });
 
   // ── /myfiles — list the user's uploaded files ──────────────────────────────
-  bot.command('myfiles', (ctx) => {
+  bot.command('myfiles', async (ctx) => {
     const userId = ctx.from.id;
-    const files = listUserUploads(userId);
+    const files = await listUserUploads(userId);
     if (!files.length) return ctx.reply('You haven\'t uploaded any files yet. Just send me a file!');
+    const userTz = await storageGet(db, userId, 'timezone');
+    const tz = userTz || process.env.TIMEZONE || process.env.TZ || 'System Default';
     const lines = files.slice(0, 50).map((f, i) => {
       const fDate = new Date(f.mtime);
-      const userTz = storageGet(db, userId, 'timezone');
-      const tz = userTz || process.env.TIMEZONE || process.env.TZ || 'System Default';
       let ds;
       try {
         ds = fDate.toLocaleString('en-US', { timeZone: tz === 'System Default' ? undefined : tz });
@@ -390,10 +390,10 @@ function createBot(db, { webhookRef = null } = {}) {
 
     // Rate limiting
     if (admin) {
-      if (!checkAndIncrementRateLimit(db, userId, ADMIN_RATE_LIMIT)) {
+      if (!(await checkAndIncrementRateLimit(db, userId, ADMIN_RATE_LIMIT))) {
         return ctx.reply(`Admin rate limit reached (${ADMIN_RATE_LIMIT} messages/hour). Try again later.`);
       }
-    } else if (!checkAndIncrementRateLimit(db, userId, RATE_LIMIT)) {
+    } else if (!(await checkAndIncrementRateLimit(db, userId, RATE_LIMIT))) {
       return ctx.reply(`You've reached the rate limit (${RATE_LIMIT} messages/hour). Try again later.`);
     }
 
@@ -402,24 +402,40 @@ function createBot(db, { webhookRef = null } = {}) {
     activeRequests.set(userId, controller);
 
     try {
-      const facts = getAllFacts(db, userId);
-      const memories = getRecentMemories(db, userId, MEMORY_TURNS);
+      const facts = await getAllFacts(db, userId);
+      const memories = await getRecentMemories(db, userId, MEMORY_TURNS);
 
       // Build history (may include a compressed summary of older turns)
       const historyMessages = await buildMessageHistory(memories, controller.signal);
 
       // Inject a planning nudge for complex multi-step requests
-      const userTimezone = storageGet(db, userId, 'timezone');
+      const userTimezone = await storageGet(db, userId, 'timezone');
       let systemContent = buildSystemMessage(facts, admin, userTimezone);
       if (isMultiStepRequest(userMessage)) {
         systemContent += '\n\n[Hint] This request appears to involve multiple steps. Consider using the `think` and `plan` tools before acting.';
       }
 
-      const messages = [
+      const rawMessages = [
         { role: 'system', content: systemContent },
         ...historyMessages,
         { role: 'user', content: userMessage },
       ];
+
+      // Combine consecutive messages of the same role to satisfy Gemini's strict alternation rules
+      const messages = [];
+      for (const msg of rawMessages) {
+        const last = messages[messages.length - 1];
+        if (last && last.role === msg.role && msg.role !== 'system') {
+          last.content += '\n\n' + msg.content;
+        } else {
+          messages.push({ ...msg });
+        }
+      }
+
+      // Gemini requires the first non-system message to be a 'user' message
+      if (messages.length > 1 && messages[1].role === 'assistant') {
+        messages.splice(1, 0, { role: 'user', content: '[Conversation context]' });
+      }
 
       // Typing indicator — re-fire every 4s (Telegram clears it after 5s)
       await ctx.sendChatAction('typing');
@@ -436,13 +452,17 @@ function createBot(db, { webhookRef = null } = {}) {
 
       await sendLong(ctx, reply);
 
-      saveMemory(db, userId, `user: ${userMessage}`);
-      saveMemory(db, userId, `rin: ${reply}`);
+      saveMemory(db, userId, `user: ${userMessage}`).catch(console.error);
+      saveMemory(db, userId, `rin: ${reply}`).catch(console.error);
 
       // Only extract facts for substantive, non-command messages
       if (userMessage.length > MIN_FACT_EXTRACTION_LENGTH && !userMessage.startsWith('/')) {
         extractFacts(userMessage, reply)
-          .then((newFacts) => { for (const { key, value } of newFacts) upsertFact(db, userId, key, value); })
+          .then(async (newFacts) => {
+            for (const { key, value } of newFacts) {
+              await upsertFact(db, userId, key, value).catch(console.error);
+            }
+          })
           .catch(() => { });
       }
     } catch (err) {

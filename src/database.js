@@ -1,17 +1,13 @@
 'use strict';
 
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
 const admin = require('firebase-admin');
+const fs = require('fs');
+const path = require('path');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const DB_PATH = path.join(DATA_DIR, 'rin.db');
 const FIREBASE_SERVICE_ACCOUNT_PATH = path.join(__dirname, '..', 'firebase-service-account.json');
+const envJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
 let firestoreDB = null;
-
-const envJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
 if (envJson) {
   try {
@@ -42,389 +38,357 @@ if (envJson) {
   console.warn('[firebase] No FIREBASE_SERVICE_ACCOUNT_JSON in .env or firebase-service-account.json file found. Firebase features will be disabled.');
 }
 
-// ⚡ Bolt: Cache prepared statements on the database instance to avoid reparsing SQL on every call.
-function getStmt(db, sql) {
-  if (!db._statements) db._statements = {};
-  return db._statements[sql] || (db._statements[sql] = db.prepare(sql));
-}
-
 function initDb() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-  const db = new Database(DB_PATH);
-
-  // ⚡ Bolt: Enable WAL mode for significantly faster database writes
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
-
-  _createTables(db);
-  _runMigrations(db);
-
-  return db;
+  return firestoreDB;
 }
 
-// ── Table Creation ─────────────────────────────────────────────────────────
-function _createTables(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS memory (
-      id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id   INTEGER NOT NULL DEFAULT 0,
-      content   TEXT NOT NULL,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE INDEX IF NOT EXISTS idx_memory_user_id ON memory (user_id, id DESC);
-
-    CREATE TABLE IF NOT EXISTS user_facts (
-      user_id INTEGER NOT NULL DEFAULT 0,
-      key     TEXT NOT NULL,
-      value   TEXT NOT NULL,
-      PRIMARY KEY (user_id, key)
-    );
-
-    CREATE TABLE IF NOT EXISTS reminders (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id    INTEGER NOT NULL,
-      message    TEXT NOT NULL,
-      fire_at    INTEGER NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_reminders_fire ON reminders (fire_at);
-    CREATE INDEX IF NOT EXISTS idx_reminders_user_fire ON reminders (user_id, fire_at ASC);
-
-    CREATE TABLE IF NOT EXISTS notes (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id    INTEGER NOT NULL,
-      title      TEXT NOT NULL,
-      content    TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      UNIQUE(user_id, title)
-    );
-    CREATE INDEX IF NOT EXISTS idx_notes_user_updated ON notes (user_id, updated_at DESC);
-
-    CREATE TABLE IF NOT EXISTS storage (
-      user_id    INTEGER NOT NULL,
-      key        TEXT NOT NULL,
-      value      TEXT NOT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      PRIMARY KEY (user_id, key)
-    );
-
-    CREATE TABLE IF NOT EXISTS cron_jobs (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id    INTEGER NOT NULL,
-      name       TEXT NOT NULL,
-      schedule   TEXT NOT NULL,
-      action     TEXT NOT NULL,
-      payload    TEXT NOT NULL,
-      enabled    INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      UNIQUE(user_id, name)
-    );
-
-    CREATE TABLE IF NOT EXISTS health_checks (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id          INTEGER NOT NULL,
-      name             TEXT NOT NULL,
-      url              TEXT NOT NULL,
-      interval_minutes INTEGER NOT NULL DEFAULT 5,
-      last_checked     INTEGER,
-      last_status      INTEGER,
-      enabled          INTEGER NOT NULL DEFAULT 1,
-      UNIQUE(user_id, name)
-    );
-
-    CREATE TABLE IF NOT EXISTS api_metrics (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp  INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      model      TEXT NOT NULL,
-      tokens_in  INTEGER NOT NULL DEFAULT 0,
-      tokens_out INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE INDEX IF NOT EXISTS idx_api_metrics_timestamp ON api_metrics (timestamp, model);
-
-    CREATE TABLE IF NOT EXISTS rate_limits (
-      user_id      INTEGER NOT NULL,
-      window_start INTEGER NOT NULL,
-      count        INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (user_id, window_start)
-    );
-
-    CREATE TABLE IF NOT EXISTS google_auth (
-      user_id       INTEGER PRIMARY KEY,
-      access_token  TEXT NOT NULL,
-      refresh_token TEXT,
-      expiry_date   INTEGER NOT NULL
-    );
-  `);
-}
-
-// ── Migrations ─────────────────────────────────────────────────────────────
-function _runMigrations(db) {
-  const memCols = db.prepare('PRAGMA table_info(memory)').all().map((c) => c.name);
-  if (!memCols.includes('user_id')) {
-    db.exec('ALTER TABLE memory ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0');
-    db.exec('CREATE INDEX IF NOT EXISTS idx_memory_user ON memory (user_id)');
-  }
-
-  const factCols = db.prepare('PRAGMA table_info(user_facts)').all().map((c) => c.name);
-  if (!factCols.includes('user_id')) {
-    db.exec('DROP TABLE IF EXISTS user_facts');
-    db.exec('CREATE TABLE user_facts (user_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (user_id, key))');
-  }
-
-  // ── Performance Indexes Migration ───────────────────────────────────────────
-  db.exec('DROP INDEX IF EXISTS idx_memory_user');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_memory_user_id ON memory (user_id, id DESC)');
-
-  db.exec('CREATE INDEX IF NOT EXISTS idx_reminders_user_fire ON reminders (user_id, fire_at ASC)');
-
-  db.exec('DROP INDEX IF EXISTS idx_notes_user');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_notes_user_updated ON notes (user_id, updated_at DESC)');
-
-  db.exec('CREATE INDEX IF NOT EXISTS idx_api_metrics_timestamp ON api_metrics (timestamp, model)');
+function getUserRef(userId) {
+  return firestoreDB.collection('users').doc(String(userId));
 }
 
 // ── Conversation memory ────────────────────────────────────────────────────────
 
-function saveMemory(db, userId, content) {
-  getStmt(db, 'INSERT INTO memory (user_id, content) VALUES (?, ?)').run(userId, content);
+async function saveMemory(db, userId, content) {
+  if (!firestoreDB) return;
+  const memRef = getUserRef(userId).collection('memory');
+  await memRef.add({
+    content,
+    timestamp: admin.firestore.FieldValue.serverTimestamp()
+  });
 }
 
-function getRecentMemories(db, userId, limit) {
+async function getRecentMemories(db, userId, limit) {
+  if (!firestoreDB) return [];
   const count = limit || parseInt(process.env.MEMORY_TURNS || '20', 10);
-  return getStmt(db, 'SELECT content FROM memory WHERE user_id = ? ORDER BY id DESC LIMIT ?')
-    .all(userId, count)
-    .reverse();
+  const memRef = getUserRef(userId).collection('memory');
+  const snapshot = await memRef.orderBy('timestamp', 'desc').limit(count).get();
+  const memories = [];
+  snapshot.forEach(doc => memories.push({ content: doc.data().content }));
+  return memories.reverse();
 }
 
 // ── User facts ─────────────────────────────────────────────────────────────────
 
-function upsertFact(db, userId, key, value) {
-  getStmt(db, 'INSERT OR REPLACE INTO user_facts (user_id, key, value) VALUES (?, ?, ?)')
-    .run(userId, key.trim().toLowerCase(), String(value).trim());
+async function upsertFact(db, userId, key, value) {
+  if (!firestoreDB) return;
+  const factKey = key.trim().toLowerCase();
+  await getUserRef(userId).collection('facts').doc(factKey).set({ value: String(value).trim() });
 }
 
-function getAllFacts(db, userId) {
-  return getStmt(db, 'SELECT key, value FROM user_facts WHERE user_id = ?').all(userId)
-    .reduce((acc, { key, value }) => { acc[key] = value; return acc; }, {});
+async function getAllFacts(db, userId) {
+  if (!firestoreDB) return {};
+  const snapshot = await getUserRef(userId).collection('facts').get();
+  const facts = {};
+  snapshot.forEach(doc => { facts[doc.id] = doc.data().value; });
+  return facts;
 }
 
 // ── Reminders ─────────────────────────────────────────────────────────────────
 
-function addReminder(db, userId, message, fireAt) {
-  return getStmt(db, 'INSERT INTO reminders (user_id, message, fire_at) VALUES (?, ?, ?)')
-    .run(userId, message, fireAt).lastInsertRowid;
+async function addReminder(db, userId, message, fireAt) {
+  if (!firestoreDB) return 0;
+  const ref = await firestoreDB.collection('reminders').add({
+    user_id: userId,
+    message,
+    fire_at: fireAt,
+    created_at: Math.floor(Date.now() / 1000)
+  });
+  return ref.id;
 }
 
-function getPendingReminders(db, userId) {
-  return getStmt(db, 'SELECT id, message, fire_at FROM reminders WHERE user_id = ? ORDER BY fire_at ASC')
-    .all(userId);
+async function getPendingReminders(db, userId) {
+  if (!firestoreDB) return [];
+  const snapshot = await firestoreDB.collection('reminders').where('user_id', '==', userId).get();
+  const reminders = [];
+  snapshot.forEach(doc => reminders.push({ id: doc.id, ...doc.data() }));
+  reminders.sort((a, b) => a.fire_at - b.fire_at);
+  return reminders;
 }
 
-function deleteReminder(db, userId, id) {
-  return getStmt(db, 'DELETE FROM reminders WHERE id = ? AND user_id = ?')
-    .run(id, userId).changes > 0;
+async function deleteReminder(db, userId, id) {
+  if (!firestoreDB) return false;
+  const docRef = firestoreDB.collection('reminders').doc(String(id));
+  const doc = await docRef.get();
+  if (doc.exists && doc.data().user_id === userId) {
+    await docRef.delete();
+    return true;
+  }
+  return false;
 }
 
-function getDueReminders(db) {
-  return getStmt(db, 'SELECT * FROM reminders WHERE fire_at <= ? ORDER BY fire_at ASC')
-    .all(Math.floor(Date.now() / 1000));
+async function getDueReminders(db) {
+  if (!firestoreDB) return [];
+  const now = Math.floor(Date.now() / 1000);
+  const snapshot = await firestoreDB.collection('reminders').where('fire_at', '<=', now).orderBy('fire_at', 'asc').get();
+  const due = [];
+  snapshot.forEach(doc => due.push({ id: doc.id, userId: doc.data().user_id, ...doc.data() }));
+  return due;
 }
 
-function deleteFiredReminder(db, id) {
-  getStmt(db, 'DELETE FROM reminders WHERE id = ?').run(id);
+async function deleteFiredReminder(db, id) {
+  if (!firestoreDB) return;
+  await firestoreDB.collection('reminders').doc(String(id)).delete();
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
-function upsertNote(db, userId, title, content) {
-  getStmt(db, `
-    INSERT INTO notes (user_id, title, content)
-    VALUES (?, ?, ?)
-    ON CONFLICT(user_id, title) DO UPDATE SET
-      content = excluded.content, updated_at = strftime('%s', 'now')
-  `).run(userId, title, content);
+async function upsertNote(db, userId, title, content) {
+  if (!firestoreDB) return;
+  const titleSlug = Buffer.from(title).toString('base64'); // Avoid invalid doc IDs
+  await getUserRef(userId).collection('notes').doc(titleSlug).set({
+    title,
+    content,
+    updated_at: Math.floor(Date.now() / 1000)
+  }, { merge: true });
 }
 
-function getNotes(db, userId, search = null) {
-  if (search) {
-    const q = `%${search}%`;
-    return getStmt(db, 'SELECT id, title, content FROM notes WHERE user_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY updated_at DESC')
-      .all(userId, q, q);
+async function getNotes(db, userId, search = null) {
+  if (!firestoreDB) return [];
+  const snapshot = await getUserRef(userId).collection('notes').orderBy('updated_at', 'desc').get();
+  const notes = [];
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    if (!search || data.title.toLowerCase().includes(search.toLowerCase()) || data.content.toLowerCase().includes(search.toLowerCase())) {
+      notes.push({ id: doc.id, ...data });
+    }
+  });
+  return notes;
+}
+
+async function deleteNote(db, userId, title) {
+  if (!firestoreDB) return false;
+  const titleSlug = Buffer.from(title).toString('base64');
+  const docRef = getUserRef(userId).collection('notes').doc(titleSlug);
+  const doc = await docRef.get();
+  if (doc.exists) {
+    await docRef.delete();
+    return true;
   }
-  return getStmt(db, 'SELECT id, title, content FROM notes WHERE user_id = ? ORDER BY updated_at DESC')
-    .all(userId);
-}
-
-function deleteNote(db, userId, title) {
-  return getStmt(db, 'DELETE FROM notes WHERE user_id = ? AND title = ?')
-    .run(userId, title).changes > 0;
+  return false;
 }
 
 // ── Local storage ─────────────────────────────────────────────────────────────
 
-function storageSet(db, userId, key, value) {
-  getStmt(db, `
-    INSERT INTO storage (user_id, key, value)
-    VALUES (?, ?, ?)
-    ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = strftime('%s', 'now')
-  `).run(userId, key, String(value));
+async function storageSet(db, userId, key, value) {
+  if (!firestoreDB) return;
+  await getUserRef(userId).collection('storage').doc(key).set({
+    value: String(value),
+    updated_at: Math.floor(Date.now() / 1000)
+  }, { merge: true });
 }
 
-function storageGet(db, userId, key) {
-  return getStmt(db, 'SELECT value FROM storage WHERE user_id = ? AND key = ?').get(userId, key)?.value ?? null;
+async function storageGet(db, userId, key) {
+  if (!firestoreDB) return null;
+  const doc = await getUserRef(userId).collection('storage').doc(key).get();
+  return doc.exists ? doc.data().value : null;
 }
 
-function storageDelete(db, userId, key) {
-  return getStmt(db, 'DELETE FROM storage WHERE user_id = ? AND key = ?').run(userId, key).changes > 0;
+async function storageDelete(db, userId, key) {
+  if (!firestoreDB) return false;
+  const docRef = getUserRef(userId).collection('storage').doc(key);
+  const doc = await docRef.get();
+  if (doc.exists) {
+    await docRef.delete();
+    return true;
+  }
+  return false;
 }
 
-function storageList(db, userId) {
-  return getStmt(db, 'SELECT key, value FROM storage WHERE user_id = ? ORDER BY key').all(userId);
+async function storageList(db, userId) {
+  if (!firestoreDB) return [];
+  const snapshot = await getUserRef(userId).collection('storage').orderBy(admin.firestore.FieldPath.documentId()).get();
+  const items = [];
+  snapshot.forEach(doc => items.push({ key: doc.id, value: doc.data().value }));
+  return items;
 }
 
 // ── Cron jobs ─────────────────────────────────────────────────────────────────
 
-function addCronJob(db, userId, name, schedule, action, payload) {
-  return getStmt(db, `
-    INSERT INTO cron_jobs (user_id, name, schedule, action, payload)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(user_id, name) DO UPDATE SET
-      schedule = excluded.schedule,
-      action   = excluded.action,
-      payload  = excluded.payload,
-      enabled  = 1
-  `).run(userId, name, schedule, action, JSON.stringify(payload)).lastInsertRowid;
+async function addCronJob(db, userId, name, schedule, action, payload) {
+  if (!firestoreDB) return null;
+  const nameSlug = Buffer.from(name).toString('base64');
+  const idStr = `${userId}_${nameSlug}`;
+  await firestoreDB.collection('cron_jobs').doc(idStr).set({
+    user_id: userId,
+    name,
+    schedule,
+    action,
+    payload: JSON.stringify(payload),
+    enabled: 1,
+    created_at: Math.floor(Date.now() / 1000)
+  }, { merge: true });
+  return idStr;
 }
 
-function listCronJobs(db, userId) {
-  return getStmt(db, 'SELECT * FROM cron_jobs WHERE user_id = ? ORDER BY id').all(userId);
+async function listCronJobs(db, userId) {
+  if (!firestoreDB) return [];
+  const snapshot = await firestoreDB.collection('cron_jobs').where('user_id', '==', userId).get();
+  const jobs = [];
+  snapshot.forEach(doc => jobs.push({ id: doc.id, ...doc.data() }));
+  return jobs;
 }
 
-function deleteCronJob(db, userId, name) {
-  return getStmt(db, 'DELETE FROM cron_jobs WHERE user_id = ? AND name = ?').run(userId, name).changes > 0;
+async function deleteCronJob(db, userId, name) {
+  if (!firestoreDB) return false;
+  const nameSlug = Buffer.from(name).toString('base64');
+  const idStr = `${userId}_${nameSlug}`;
+  const docRef = firestoreDB.collection('cron_jobs').doc(idStr);
+  const doc = await docRef.get();
+  if (doc.exists && doc.data().user_id === userId) {
+    await docRef.delete();
+    return true;
+  }
+  return false;
 }
 
-function getAllEnabledCrons(db) {
-  return getStmt(db, 'SELECT * FROM cron_jobs WHERE enabled = 1').all();
+async function getAllEnabledCrons(db) {
+  if (!firestoreDB) return [];
+  const snapshot = await firestoreDB.collection('cron_jobs').where('enabled', '==', 1).get();
+  const jobs = [];
+  snapshot.forEach(doc => jobs.push({ id: doc.id, ...doc.data() }));
+  return jobs;
 }
 
 // ── Health checks ─────────────────────────────────────────────────────────────
 
-function addHealthCheck(db, userId, name, url, intervalMinutes = 5) {
-  getStmt(db, `
-    INSERT INTO health_checks (user_id, name, url, interval_minutes)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(user_id, name) DO UPDATE SET
-      url = excluded.url, interval_minutes = excluded.interval_minutes, enabled = 1
-  `).run(userId, name, url, intervalMinutes);
+async function addHealthCheck(db, userId, name, url, intervalMinutes = 5) {
+  if (!firestoreDB) return;
+  const nameSlug = Buffer.from(name).toString('base64');
+  const idStr = `${userId}_${nameSlug}`;
+  await firestoreDB.collection('health_checks').doc(idStr).set({
+    user_id: userId,
+    name,
+    url,
+    interval_minutes: intervalMinutes,
+    enabled: 1
+  }, { merge: true });
 }
 
-function listHealthChecks(db, userId) {
-  return getStmt(db, 'SELECT * FROM health_checks WHERE user_id = ? ORDER BY id').all(userId);
+async function listHealthChecks(db, userId) {
+  if (!firestoreDB) return [];
+  const snapshot = await firestoreDB.collection('health_checks').where('user_id', '==', userId).get();
+  const checks = [];
+  snapshot.forEach(doc => checks.push({ id: doc.id, ...doc.data() }));
+  return checks;
 }
 
-function deleteHealthCheck(db, userId, name) {
-  return getStmt(db, 'DELETE FROM health_checks WHERE user_id = ? AND name = ?').run(userId, name).changes > 0;
+async function deleteHealthCheck(db, userId, name) {
+  if (!firestoreDB) return false;
+  const nameSlug = Buffer.from(name).toString('base64');
+  const idStr = `${userId}_${nameSlug}`;
+  const docRef = firestoreDB.collection('health_checks').doc(idStr);
+  const doc = await docRef.get();
+  if (doc.exists && doc.data().user_id === userId) {
+    await docRef.delete();
+    return true;
+  }
+  return false;
 }
 
-function getHealthChecksToRun(db) {
+async function getHealthChecksToRun(db) {
+  if (!firestoreDB) return [];
   const now = Math.floor(Date.now() / 1000);
-  return getStmt(db, `
-    SELECT * FROM health_checks WHERE enabled = 1
-    AND (last_checked IS NULL OR last_checked + interval_minutes * 60 <= ?)
-  `).all(now);
+  const snapshot = await firestoreDB.collection('health_checks').where('enabled', '==', 1).get();
+  const checks = [];
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    if (!data.last_checked || data.last_checked + data.interval_minutes * 60 <= now) {
+      checks.push({ id: doc.id, ...data });
+    }
+  });
+  return checks;
 }
 
-function updateHealthCheckStatus(db, id, status) {
-  getStmt(db, 'UPDATE health_checks SET last_checked = ?, last_status = ? WHERE id = ?')
-    .run(Math.floor(Date.now() / 1000), status, id);
+async function updateHealthCheckStatus(db, id, status) {
+  if (!firestoreDB) return;
+  await firestoreDB.collection('health_checks').doc(String(id)).update({
+    last_checked: Math.floor(Date.now() / 1000),
+    last_status: status
+  });
 }
 
 // ── API metrics ────────────────────────────────────────────────────────────────
 
-function logApiCall(db, model, tokensIn, tokensOut) {
-  getStmt(db, 'INSERT INTO api_metrics (model, tokens_in, tokens_out) VALUES (?, ?, ?)')
-    .run(model, tokensIn || 0, tokensOut || 0);
+async function logApiCall(db, model, tokensIn, tokensOut) {
+  if (!firestoreDB) return;
+  await firestoreDB.collection('api_metrics').add({
+    model,
+    tokens_in: tokensIn || 0,
+    tokens_out: tokensOut || 0,
+    timestamp: Math.floor(Date.now() / 1000)
+  });
 }
 
-function getApiUsageSummary(db, days = 7) {
+async function getApiUsageSummary(db, days = 7) {
+  if (!firestoreDB) return [];
   const since = Math.floor(Date.now() / 1000) - days * 86400;
-  return getStmt(db, `
-    SELECT model,
-           COUNT(*) as calls,
-           SUM(tokens_in) as tokens_in,
-           SUM(tokens_out) as tokens_out
-    FROM api_metrics WHERE timestamp >= ?
-    GROUP BY model
-  `).all(since);
+  const snapshot = await firestoreDB.collection('api_metrics').where('timestamp', '>=', since).get();
+  const aggregated = {};
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    if (!aggregated[data.model]) {
+      aggregated[data.model] = { model: data.model, calls: 0, tokens_in: 0, tokens_out: 0 };
+    }
+    aggregated[data.model].calls++;
+    aggregated[data.model].tokens_in += data.tokens_in;
+    aggregated[data.model].tokens_out += data.tokens_out;
+  });
+  return Object.values(aggregated);
 }
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
-function checkAndIncrementRateLimit(db, userId, limitPerHour) {
-  const windowStart = Math.floor(Date.now() / 3600000) * 3600;
-  // Atomic: only increment if currently under limit (or no row yet)
-  const upd = getStmt(db, `
-    UPDATE rate_limits SET count = count + 1
-    WHERE user_id = ? AND window_start = ? AND count < ?
-  `).run(userId, windowStart, limitPerHour);
-  if (upd.changes === 1) {
-    return true;
+async function checkAndIncrementRateLimit(db, userId, limitPerHour) {
+  if (!firestoreDB) return true; // Fail open if no DB
+  if (limitPerHour === 0) return true; // Unlimited
+
+  const windowStart = String(Math.floor(Date.now() / 3600000) * 3600);
+  const rateLimitRef = getUserRef(userId).collection('rate_limits').doc(windowStart);
+
+  try {
+    return await firestoreDB.runTransaction(async (transaction) => {
+      const doc = await transaction.get(rateLimitRef);
+      if (!doc.exists) {
+        transaction.set(rateLimitRef, { count: 1 });
+        return true;
+      }
+      const count = doc.data().count;
+      if (count < limitPerHour) {
+        transaction.update(rateLimitRef, { count: count + 1 });
+        return true;
+      }
+      return false;
+    });
+  } catch (e) {
+    console.error('[firebase] Rate limit transaction failed', e);
+    return true; // Fail open
   }
-  // No row or at/over limit — ensure row exists for this window, then allow only if we inserted (first message)
-  const ins = getStmt(db, `
-    INSERT INTO rate_limits (user_id, window_start, count) VALUES (?, ?, 1)
-    ON CONFLICT(user_id, window_start) DO NOTHING
-  `).run(userId, windowStart);
-  const allowed = ins.changes === 1;
-  return allowed;
 }
 
 // ── Google OAuth Tokens (Firebase) ─────────────────────────────────────────────
 
 async function saveGoogleTokens(db, userId, tokens) {
-  if (!firestoreDB) {
-    console.error('[firebase] Cannot save Google tokens: Firebase is not initialized.');
-    return;
-  }
-
+  if (!firestoreDB) return;
   try {
-    const docRef = firestoreDB.collection('google_auth').doc(String(userId));
-
-    // We only update refresh_token if it's provided in the new tokens object.
     const updateData = {
       access_token: tokens.access_token || '',
       expiry_date: tokens.expiry_date || 0,
       updated_at: admin.firestore.FieldValue.serverTimestamp()
     };
-
     if (tokens.refresh_token) {
       updateData.refresh_token = tokens.refresh_token;
     }
-
-    await docRef.set(updateData, { merge: true });
+    await firestoreDB.collection('google_auth').doc(String(userId)).set(updateData, { merge: true });
   } catch (error) {
     console.error(`[firebase] Error saving tokens for user ${userId}:`, error);
   }
 }
 
 async function getGoogleTokens(db, userId) {
-  if (!firestoreDB) {
-    console.error('[firebase] Cannot get Google tokens: Firebase is not initialized.');
-    return null;
-  }
-
+  if (!firestoreDB) return null;
   try {
-    const docRef = firestoreDB.collection('google_auth').doc(String(userId));
-    const doc = await docRef.get();
-
-    if (doc.exists) {
-      return doc.data();
-    } else {
-      return null;
-    }
+    const doc = await firestoreDB.collection('google_auth').doc(String(userId)).get();
+    return doc.exists ? doc.data() : null;
   } catch (error) {
     console.error(`[firebase] Error getting tokens for user ${userId}:`, error);
     return null;

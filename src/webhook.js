@@ -8,7 +8,7 @@ const crypto = require('crypto');
  * Webhooks are registered in the DB as (user_id, name, token, description).
  * Any POST to /webhook/:token delivers the request body as a Telegram message.
  *
- * @param {object} db       - better-sqlite3 instance
+ * @param {object} db       - Firestore database instance
  * @param {object} telegram - Telegraf telegram instance
  * @returns {{ app, server, addWebhook, removeWebhook, listWebhooks }}
  */
@@ -73,9 +73,9 @@ function startWebhookServer(db, telegram) {
       return res.status(429).json({ error: 'Rate limit exceeded. Max 60 requests/minute per webhook.' });
     }
 
-    const hook = db.prepare('SELECT * FROM webhooks WHERE token = ? AND enabled = 1').get(token);
-
-    if (!hook) return res.status(404).json({ error: 'Unknown webhook' });
+    const doc = await db.collection('webhooks').doc(token).get();
+    if (!doc.exists || doc.data().enabled !== 1) return res.status(404).json({ error: 'Unknown webhook' });
+    const hook = doc.data();
 
     const body = typeof req.body === 'object'
       ? JSON.stringify(req.body, null, 2)
@@ -92,37 +92,47 @@ function startWebhookServer(db, telegram) {
     }
   });
 
-  // ── DB helpers (used by tools) ──────────────────────────────────────────────
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS webhooks (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id     INTEGER NOT NULL,
-      name        TEXT NOT NULL,
-      token       TEXT NOT NULL UNIQUE,
-      description TEXT NOT NULL DEFAULT '',
-      enabled     INTEGER NOT NULL DEFAULT 1,
-      created_at  INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-    );
-  `);
-
-  function addWebhook(userId, name, description = '') {
+  async function addWebhook(userId, name, description = '') {
     const token = crypto.randomBytes(24).toString('hex');
-    db.prepare('INSERT OR REPLACE INTO webhooks (user_id, name, token, description) VALUES (?, ?, ?, ?)')
-      .run(userId, name, token, description);
+    await db.collection('webhooks').doc(token).set({
+      user_id: userId,
+      name,
+      token,
+      description,
+      enabled: 1,
+      created_at: Math.floor(Date.now() / 1000)
+    });
     const baseUrl = process.env.WEBHOOK_BASE_URL || `http://YOUR_VPS_IP:${port}`;
     return { token, url: `${baseUrl}/webhook/${token}` };
   }
 
-  function removeWebhook(userId, name) {
-    return db.prepare('DELETE FROM webhooks WHERE user_id = ? AND name = ?')
-      .run(userId, name).changes > 0;
+  async function removeWebhook(userId, name) {
+    const snapshot = await db.collection('webhooks')
+      .where('user_id', '==', userId)
+      .where('name', '==', name)
+      .get();
+
+    if (snapshot.empty) return false;
+
+    const batch = db.batch();
+    snapshot.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    return true;
   }
 
-  function listWebhooks(userId) {
+  async function listWebhooks(userId) {
     const baseUrl = process.env.WEBHOOK_BASE_URL || `http://YOUR_VPS_IP:${port}`;
-    return db.prepare('SELECT name, token, description FROM webhooks WHERE user_id = ? AND enabled = 1 ORDER BY id')
-      .all(userId)
-      .map((w) => ({ ...w, url: `${baseUrl}/webhook/${w.token}` }));
+    const snapshot = await db.collection('webhooks')
+      .where('user_id', '==', userId)
+      .where('enabled', '==', 1)
+      .get();
+
+    const webhooks = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      webhooks.push({ ...data, url: `${baseUrl}/webhook/${data.token}` });
+    });
+    return webhooks;
   }
 
   const server = app.listen(port, () => {

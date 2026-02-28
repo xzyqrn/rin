@@ -23,7 +23,8 @@ function _trackUsage(completion) {
   if (!_db || !completion.usage) return;
   try {
     const { logApiCall } = require('./database');
-    logApiCall(_db, completion.model || MODEL, completion.usage.prompt_tokens, completion.usage.completion_tokens);
+    logApiCall(_db, completion.model || MODEL, completion.usage.prompt_tokens, completion.usage.completion_tokens)
+      .catch(err => console.error('[llm] Usage track error:', err.message));
   } catch { /* non-critical */ }
 }
 
@@ -105,6 +106,11 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
+      // DEBUG LOGGING
+      try {
+        fs.writeFileSync('/tmp/llm_payload.json', JSON.stringify({ model: MODEL, messages: current, tools: (toolDefs || []).length }));
+      } catch (e) { }
+
       const completion = await _retryCreate({
         model: MODEL,
         messages: current,

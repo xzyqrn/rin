@@ -23,7 +23,7 @@ if (!process.env.GEMINI_API_KEY && !process.env.OPENROUTER_API_KEY) {
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 const db = initDb();
-console.log('[db] SQLite initialized.');
+console.log('[db] Firestore initialized.');
 
 initLlm(db);
 
@@ -62,5 +62,5 @@ bot.launch().then(() => {
 });
 
 // ── Graceful shutdown ──────────────────────────────────────────────────────────
-process.once('SIGINT', () => { console.log('[bot] Shutting down…'); bot.stop('SIGINT'); db.close(); });
-process.once('SIGTERM', () => { console.log('[bot] Shutting down…'); bot.stop('SIGTERM'); db.close(); });
+process.once('SIGINT', () => { console.log('[bot] Shutting down…'); bot.stop('SIGINT'); });
+process.once('SIGTERM', () => { console.log('[bot] Shutting down…'); bot.stop('SIGTERM'); });

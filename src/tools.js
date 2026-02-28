@@ -627,8 +627,8 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
   const definitions = keys.map((k) => DEF[k]);
 
   async function executor(toolName, args) {
-    function formatTime(ms) {
-      const userTz = storageGet(db, userId, 'timezone');
+    async function formatTimeAsync(ms) {
+      const userTz = await storageGet(db, userId, 'timezone');
       const tz = userTz || process.env.TIMEZONE || process.env.TZ || 'System Default';
       try {
         return new Date(ms).toLocaleString('en-US', { timeZone: tz === 'System Default' ? undefined : tz });
@@ -656,43 +656,43 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
         }
         if (!fireAt || isNaN(fireAt)) return 'Could not parse the time — please try again.';
         if (fireAt <= Math.floor(Date.now() / 1000)) return 'That time is in the past.';
-        const id = addReminder(db, userId, args.message, fireAt);
-        return `Reminder #${id} set for ${formatTime(fireAt * 1000)}: "${args.message}"`;
+        const id = await addReminder(db, userId, args.message, fireAt);
+        return `Reminder #${id} set for ${await formatTimeAsync(fireAt * 1000)}: "${args.message}"`;
       }
 
       case 'list_reminders': {
-        const rows = getPendingReminders(db, userId);
+        const rows = await getPendingReminders(db, userId);
         if (!rows.length) return 'No pending reminders.';
-        return rows.map((r) => `#${r.id} — "${r.message}" at ${formatTime(r.fire_at * 1000)}`).join('\n');
+        return Promise.all(rows.map(async (r) => `#${r.id} — "${r.message}" at ${await formatTimeAsync(r.fire_at * 1000)}`)).then(res => res.join('\n'));
       }
 
       case 'delete_reminder': {
-        const ok = deleteReminder(db, userId, Number(args.id));
+        const ok = await deleteReminder(db, userId, Number(args.id));
         return ok ? `Reminder #${args.id} cancelled.` : `No reminder with ID ${args.id}.`;
       }
 
       // ── Notes ──────────────────────────────────────────────────────────────
       case 'save_note': {
-        upsertNote(db, userId, args.title, args.content);
+        await upsertNote(db, userId, args.title, args.content);
         return `Note "${args.title}" saved.`;
       }
 
       case 'get_notes': {
-        const rows = getNotes(db, userId, args.search || null);
+        const rows = await getNotes(db, userId, args.search || null);
         if (!rows.length) return args.search ? `No notes matching "${args.search}".` : 'No notes yet.';
         return rows.map((n) => `[${n.title}]\n${n.content}`).join('\n\n---\n\n');
       }
 
       case 'delete_note': {
-        const ok = deleteNote(db, userId, args.title);
+        const ok = await deleteNote(db, userId, args.title);
         return ok ? `Note "${args.title}" deleted.` : `No note titled "${args.title}".`;
       }
 
       // ── Storage ───────────────────────────────────────────────────────────
-      case 'storage_set': return storeSet(db, userId, args.key, args.value);
-      case 'storage_get': return storeGet(db, userId, args.key);
-      case 'storage_delete': return storeDel(db, userId, args.key);
-      case 'storage_list': return storeList(db, userId);
+      case 'storage_set': return await storeSet(db, userId, args.key, args.value);
+      case 'storage_get': return await storeGet(db, userId, args.key);
+      case 'storage_delete': return await storeDel(db, userId, args.key);
+      case 'storage_list': return await storeList(db, userId);
 
       // ── Google Integrations ───────────────────────────────────────────────
       case 'google_drive_list':
@@ -769,16 +769,16 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       // ── Monitoring ────────────────────────────────────────────────────────
       case 'system_health': return await getSystemHealth();
       case 'pm2_status': return await getPm2Status();
-      case 'api_usage': return getApiUsage(db, args.days || 7);
+      case 'api_usage': return await getApiUsage(db, args.days || 7);
 
       // ── Cron ──────────────────────────────────────────────────────────────
       case 'create_cron': {
-        const r = addJob(db, userId, args.name, args.schedule, args.action, args.payload);
+        const r = await addJob(db, userId, args.name, args.schedule, args.action, args.payload);
         return r.ok ? `Cron job "${args.name}" created (ID ${r.id}).` : `Error: ${r.error}`;
       }
 
       case 'list_crons': {
-        const jobs = listCronJobs(db, userId);
+        const jobs = await listCronJobs(db, userId);
         if (!jobs.length) return 'No cron jobs.';
         return jobs.map((j) =>
           `[${j.id}] ${j.name} — ${j.schedule} | action: ${j.action} | ${j.enabled ? 'enabled' : 'disabled'}`
@@ -786,18 +786,18 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       }
 
       case 'delete_cron': {
-        const ok = removeJob(db, userId, args.name);
+        const ok = await removeJob(db, userId, args.name);
         return ok ? `Cron job "${args.name}" deleted.` : `No cron job named "${args.name}".`;
       }
 
       // ── Health checks ──────────────────────────────────────────────────────
       case 'add_health_check': {
-        addHealthCheck(db, userId, args.name, args.url, args.interval_minutes || 5);
+        await addHealthCheck(db, userId, args.name, args.url, args.interval_minutes || 5);
         return `Health check "${args.name}" added for ${args.url} (every ${args.interval_minutes || 5} min).`;
       }
 
       case 'list_health_checks': {
-        const rows = listHealthChecks(db, userId);
+        const rows = await listHealthChecks(db, userId);
         if (!rows.length) return 'No health checks configured.';
         return rows.map((h) => {
           const last = h.last_status ? `last: HTTP ${h.last_status}` : 'never checked';
@@ -806,27 +806,27 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       }
 
       case 'remove_health_check': {
-        const ok = deleteHealthCheck(db, userId, args.name);
+        const ok = await deleteHealthCheck(db, userId, args.name);
         return ok ? `Health check "${args.name}" removed.` : `No health check named "${args.name}".`;
       }
 
       // ── Webhooks ──────────────────────────────────────────────────────────
       case 'create_webhook': {
         if (!webhookService) return 'Webhook server not running.';
-        const { url, token } = webhookService.addWebhook(userId, args.name, args.description || '');
+        const { url, token } = await webhookService.addWebhook(userId, args.name, args.description || '');
         return `Webhook "${args.name}" created.\nURL: ${url}\nPOST JSON to that URL and it will appear here.`;
       }
 
       case 'list_webhooks': {
         if (!webhookService) return 'Webhook server not running.';
-        const hooks = webhookService.listWebhooks(userId);
+        const hooks = await webhookService.listWebhooks(userId);
         if (!hooks.length) return 'No webhooks configured.';
         return hooks.map((h) => `[${h.name}] ${h.url}${h.description ? ' — ' + h.description : ''}`).join('\n');
       }
 
       case 'delete_webhook': {
         if (!webhookService) return 'Webhook server not running.';
-        const ok = webhookService.removeWebhook(userId, args.name);
+        const ok = await webhookService.removeWebhook(userId, args.name);
         return ok ? `Webhook "${args.name}" deleted.` : `No webhook named "${args.name}".`;
       }
 
