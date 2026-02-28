@@ -1,0 +1,4 @@
+## 2025-02-28 - [CRITICAL] Fix SSRF in health check and web browsing
+**Vulnerability:** The application allowed Server-Side Request Forgery (SSRF) through `checkUrl` (which had no validation) and `browseUrl` (which had incomplete validation missing cloud metadata IP `169.254.169.254` and various IPv6 private IPs like `::`, `fc00::`). This allowed an attacker to hit internal services or extract cloud instance metadata via the bot's health check feature.
+**Learning:** Even when validation exists for one endpoint (`browseUrl`), other endpoints doing similar actions (`checkUrl`) might lack it. String-based URL validation is also tricky due to IPv6 formats (`[::]`) and multiple zero-representations (`0.0.0.0`).
+**Prevention:** Apply a unified, comprehensive check before making any outbound HTTP requests on behalf of users. A better future fix would involve resolving the hostname to an IP via DNS before making the request to prevent DNS rebinding attacks.
