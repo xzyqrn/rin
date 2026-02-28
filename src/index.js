@@ -17,8 +17,8 @@ const { startWebhookServer } = require('./webhook');
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   console.error('[error] TELEGRAM_BOT_TOKEN is not set.'); process.exit(1);
 }
-if (!process.env.OPENROUTER_API_KEY) {
-  console.error('[error] OPENROUTER_API_KEY is not set.'); process.exit(1);
+if (!process.env.GEMINI_API_KEY && !process.env.OPENROUTER_API_KEY) {
+  console.error('[error] GEMINI_API_KEY or OPENROUTER_API_KEY is not set.'); process.exit(1);
 }
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────

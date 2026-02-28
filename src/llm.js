@@ -4,10 +4,12 @@ const OpenAI = require('openai');
 
 const MODEL = process.env.LLM_MODEL || 'arcee-ai/trinity-large-preview:free';
 
+const useGeminiNative = !!process.env.GEMINI_API_KEY;
+
 const openai = new OpenAI({
-  baseURL: 'https://openrouter.ai/api/v1',
-  apiKey: process.env.OPENROUTER_API_KEY,
-  defaultHeaders: {
+  baseURL: useGeminiNative ? 'https://generativelanguage.googleapis.com/v1beta/openai/' : 'https://openrouter.ai/api/v1',
+  apiKey: useGeminiNative ? process.env.GEMINI_API_KEY : process.env.OPENROUTER_API_KEY,
+  defaultHeaders: useGeminiNative ? undefined : {
     'HTTP-Referer': 'https://github.com/rin-bot',
     'X-Title': 'Rin',
   },

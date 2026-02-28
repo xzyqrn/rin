@@ -11,9 +11,14 @@ const FIREBASE_SERVICE_ACCOUNT_PATH = path.join(__dirname, '..', 'firebase-servi
 
 let firestoreDB = null;
 
-if (fs.existsSync(FIREBASE_SERVICE_ACCOUNT_PATH)) {
+const envJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+
+if (envJson) {
   try {
-    const serviceAccount = require(FIREBASE_SERVICE_ACCOUNT_PATH);
+    const serviceAccount = JSON.parse(envJson);
+    if (serviceAccount.private_key) {
+      serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+    }
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
@@ -22,8 +27,19 @@ if (fs.existsSync(FIREBASE_SERVICE_ACCOUNT_PATH)) {
   } catch (error) {
     console.error('[firebase] Failed to initialize Firebase:', error);
   }
+} else if (fs.existsSync(FIREBASE_SERVICE_ACCOUNT_PATH)) {
+  try {
+    const serviceAccount = require(FIREBASE_SERVICE_ACCOUNT_PATH);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    firestoreDB = admin.firestore();
+    console.log('[firebase] Initialized Firebase Admin SDK from file');
+  } catch (error) {
+    console.error('[firebase] Failed to initialize Firebase from file:', error);
+  }
 } else {
-  console.warn('[firebase] No firebase-service-account.json found. Firebase features will be disabled.');
+  console.warn('[firebase] No FIREBASE_SERVICE_ACCOUNT_JSON in .env or firebase-service-account.json file found. Firebase features will be disabled.');
 }
 
 // ⚡ Bolt: Cache prepared statements on the database instance to avoid reparsing SQL on every call.
