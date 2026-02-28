@@ -34,7 +34,7 @@ function startWebhookServer(db, telegram) {
   app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
   // Google OAuth Auth URL
-  app.get('api/auth/google', (req, res) => {
+  app.get('/api/auth/google', (req, res) => {
     const { state } = req.query; // Expect userId to be passed here
     if (!state) return res.status(400).send('Missing user state');
     try {

@@ -406,11 +406,11 @@ async function getGoogleTokens(db, userId) {
     if (doc.exists) {
       const tokenData = doc.data();
 
-      if (tokenData.google_access_token) {
+      if (tokenData.access_token) {
         return {
-          access_token: tokenData.google_access_token,
-          refresh_token: tokenData.google_refresh_token,
-          expiry_date: tokenData.google_expiry_date
+          access_token: tokenData.access_token,
+          refresh_token: tokenData.refresh_token,
+          expiry_date: tokenData.expiry_date
         };
       }
       return null;

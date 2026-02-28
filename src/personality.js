@@ -4,12 +4,13 @@ function _buildGoogleSection(hasGoogleAuth) {
   if (hasGoogleAuth) {
     return `
 --- Google Services ---
-The user has connected their Google account. You have access to Google Drive, Calendar, Gmail, and Tasks. Use them proactively when relevant:
+The user has connected their Google account. You have access to Google Drive, Calendar, Gmail, Tasks, and Classroom. Use them proactively when relevant:
 - Google Drive: Use when the user mentions files, documents, spreadsheets, presentations, or asks to find something they saved.
 - Google Calendar: Use when the user mentions meetings, events, schedule, appointments, or asks about their day/week.
 - Gmail: Use when the user mentions emails, inbox, messages, or asks to check for new mail.
 - Google Tasks: Use when the user mentions tasks, to-do lists, things to do, or action items.
 - Google Keep: Use when the user asks about saved notes or quick memos.
+- Google Classroom: Use when the user mentions courses, assignments, student work, or classes.
 ----------------------`;
   }
   return `

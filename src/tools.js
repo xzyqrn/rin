@@ -24,7 +24,9 @@ const {
   listEvents,
   listUnreadEmails,
   listTasks,
-  listKeepNotes
+  listKeepNotes,
+  listCourses,
+  listCoursework
 } = require('./capabilities/google');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,6 +222,28 @@ const DEF = {
       name: 'google_keep_list',
       description: 'List notes from the user\'s Google Keep. Use when the user asks about saved notes or quick memos in Keep.',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  google_classroom_list_courses: {
+    type: 'function',
+    function: {
+      name: 'google_classroom_list_courses',
+      description: 'List the user\'s Google Classroom courses. Use when the user asks about their classes, courses, or classroom.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  google_classroom_list_coursework: {
+    type: 'function',
+    function: {
+      name: 'google_classroom_list_coursework',
+      description: 'List coursework/assignments for a specific Google Classroom course ID. Use course ID from list_courses.',
+      parameters: {
+        type: 'object',
+        properties: {
+          courseId: { type: 'string', description: 'The unique ID of the course' },
+        },
+        required: ['courseId'],
+      },
     },
   },
 
@@ -573,7 +597,11 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
     'save_note', 'get_notes', 'delete_note',
     'storage_set', 'storage_get', 'storage_delete', 'storage_list',
     // Google integrations — only when user has linked their Google account
-    ...(hasGoogleAuth ? ['google_drive_list', 'google_calendar_list', 'gmail_read_unread', 'google_tasks_list', 'google_keep_list'] : []),
+    ...(hasGoogleAuth ? [
+      'google_drive_list', 'google_calendar_list', 'gmail_read_unread',
+      'google_tasks_list', 'google_keep_list',
+      'google_classroom_list_courses', 'google_classroom_list_coursework'
+    ] : []),
     // File operations, restricted to user's folder for non-admins
     'read_file', 'write_file', 'list_directory', 'delete_file', 'send_file',
   ];
@@ -729,6 +757,18 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
           const notes = await listKeepNotes(db, userId);
           if (!notes.length) return 'No notes found.';
           return notes.map(n => `- ${n.title}\n${n.body?.text?.text || ''}`).join('\n\n');
+        } catch (e) { return e.message; }
+      case 'google_classroom_list_courses':
+        try {
+          const courses = await listCourses(db, userId);
+          if (!courses.length) return 'No courses found in Classroom.';
+          return courses.map(c => `- ${c.name} (ID: ${c.id})`).join('\n');
+        } catch (e) { return e.message; }
+      case 'google_classroom_list_coursework':
+        try {
+          const work = await listCoursework(db, userId, args.courseId);
+          if (!work.length) return 'No coursework found for this course.';
+          return work.map(w => `- ${w.title} (ID: ${w.id}) - Due: ${w.dueDate ? `${w.dueDate.year}-${w.dueDate.month}-${w.dueDate.day}` : 'No date'}`).join('\n');
         } catch (e) { return e.message; }
 
 
