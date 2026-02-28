@@ -4,7 +4,8 @@ import { db } from '@/lib/firebase';
 import * as admin from 'firebase-admin';
 
 export async function GET(request: Request) {
-    const { searchParams } = new URL(request.url);
+    const url = new URL(request.url);
+    const { searchParams } = url;
     const code = searchParams.get('code');
     const state = searchParams.get('state');
     const error = searchParams.get('error');
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
     }
 
     try {
-        const oauth2Client = getOAuth2Client();
+        const oauth2Client = getOAuth2Client(url.origin);
         const { tokens } = await oauth2Client.getToken(code);
 
         if (!db) {

@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { getAuthUrl } from '@/lib/google';
 
 export async function GET(request: Request) {
-    const { searchParams } = new URL(request.url);
+    const url = new URL(request.url);
+    const { searchParams } = url;
     const state = searchParams.get('state');
 
     if (!state) {
@@ -11,8 +12,8 @@ export async function GET(request: Request) {
     }
 
     try {
-        const url = getAuthUrl(state);
-        return NextResponse.redirect(url);
+        const authUrl = getAuthUrl(state, url.origin);
+        return NextResponse.redirect(authUrl);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error('[Google Auth] Setup incomplete:', error.message);

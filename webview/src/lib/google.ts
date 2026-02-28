@@ -1,8 +1,7 @@
 import { google } from 'googleapis';
 
-export function getOAuth2Client() {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+function resolveOAuthBaseUrl(baseUrlOverride?: string) {
+    if (baseUrlOverride) return baseUrlOverride.replace(/\/+$/, '');
 
     // Canonical OAuth owner base URL in production.
     let baseUrl = process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL;
@@ -14,6 +13,13 @@ export function getOAuth2Client() {
     if (!baseUrl) {
         throw new Error('GOOGLE_OAUTH_BASE_URL or NEXT_PUBLIC_BASE_URL must be set');
     }
+    return baseUrl.replace(/\/+$/, '');
+}
+
+export function getOAuth2Client(baseUrlOverride?: string) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const baseUrl = resolveOAuthBaseUrl(baseUrlOverride);
 
     const redirectUri = `${baseUrl}/api/auth/google/callback`;
 
@@ -30,8 +36,8 @@ export function getOAuth2Client() {
     return oauth2Client;
 }
 
-export function getAuthUrl(state: string) {
-    const oauth2Client = getOAuth2Client();
+export function getAuthUrl(state: string, baseUrlOverride?: string) {
+    const oauth2Client = getOAuth2Client(baseUrlOverride);
     const scopes = [
         'https://www.googleapis.com/auth/drive.readonly',
         'https://www.googleapis.com/auth/drive.file',
