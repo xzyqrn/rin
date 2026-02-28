@@ -12,6 +12,10 @@ function initDb() {
 
   const db = new Database(DB_PATH);
 
+  // ⚡ Bolt: Enable WAL mode for significantly faster database writes
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+
   _createTables(db);
   _runMigrations(db);
 
