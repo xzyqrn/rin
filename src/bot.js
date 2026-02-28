@@ -225,10 +225,10 @@ function createBot(db, { webhookRef = null } = {}) {
           ctx.chat.id,
           statusMsg.message_id,
           undefined,
-          '❌ Sorry, I couldn\'t save that file. Please try again.'
+          `❌ Sorry, I couldn't save that file: ${err.message || 'Unknown error'}`
         );
       } else {
-        await ctx.reply('❌ Sorry, I couldn\'t save that file. Please try again.');
+        await ctx.reply(`❌ Sorry, I couldn't save that file: ${err.message || 'Unknown error'}`);
       }
     }
   }
