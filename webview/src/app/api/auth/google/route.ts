@@ -13,6 +13,7 @@ export async function GET(request: Request) {
     try {
         const url = getAuthUrl(state);
         return NextResponse.redirect(url);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error('[Google Auth] Setup incomplete:', error.message);
         console.error('[Google Auth] Error details:', error);
