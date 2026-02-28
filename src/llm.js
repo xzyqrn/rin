@@ -204,9 +204,17 @@ No explanation, no markdown — just the JSON array.`,
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
     const parsed = JSON.parse(cleaned);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item) => item && typeof item.key === 'string' && item.key && typeof item.value === 'string' && item.value
-    );
+    // Sanitize facts: enforce snake_case keys, cap value length, and reject
+    // values that look like prompt-injection attempts.
+    const INJECTION_RE = /\b(ignore|override|system:|you are now|new instructions|forget|disregard|jailbreak)\b/i;
+    return parsed.filter((item) => {
+      if (!item || typeof item.key !== 'string' || typeof item.value !== 'string') return false;
+      if (!item.key || !item.value) return false;
+      if (!/^[a-z_][a-z0-9_]*$/.test(item.key)) return false;  // snake_case keys only
+      if (item.value.length > 200) return false;                 // cap value length
+      if (INJECTION_RE.test(item.value)) return false;           // reject injection patterns
+      return true;
+    });
   } catch {
     return [];
   }

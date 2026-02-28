@@ -15,6 +15,7 @@ const ADMIN_IDS = (process.env.ADMIN_USER_ID || '')
   .split(',').map((s) => s.trim()).filter(Boolean).map(Number);
 
 const RATE_LIMIT = parseInt(process.env.RATE_LIMIT_PER_HOUR || '60', 10);
+const ADMIN_RATE_LIMIT = parseInt(process.env.ADMIN_RATE_LIMIT_PER_HOUR || '300', 10);
 const MEMORY_TURNS = parseInt(process.env.MEMORY_TURNS || '30', 10);
 const RECENT_TURNS = 10;          // keep this many turns verbatim
 const COMPRESS_THRESHOLD = 15;    // summarise if older turns exceed this count
@@ -289,8 +290,12 @@ function createBot(db, { webhookRef = null } = {}) {
     const userId = ctx.from.id;
     const admin = isAdmin(ctx);
 
-    // Rate limiting (admins are exempt)
-    if (!admin && !checkAndIncrementRateLimit(db, userId, RATE_LIMIT)) {
+    // Rate limiting
+    if (admin) {
+      if (!checkAndIncrementRateLimit(db, userId, ADMIN_RATE_LIMIT)) {
+        return ctx.reply(`Admin rate limit reached (${ADMIN_RATE_LIMIT} messages/hour). Try again later.`);
+      }
+    } else if (!checkAndIncrementRateLimit(db, userId, RATE_LIMIT)) {
       return ctx.reply(`You've reached the rate limit (${RATE_LIMIT} messages/hour). Try again later.`);
     }
 
