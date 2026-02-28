@@ -254,6 +254,15 @@ const DEF = {
     },
   },
 
+  update_bot: {
+    type: 'function',
+    function: {
+      name: 'update_bot',
+      description: 'Update the bot by pulling the latest code from git, installing npm dependencies, and restarting the service. Use this whenever the user asks you to update yourself.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
   read_file: {
     type: 'function',
     function: {
@@ -516,7 +525,7 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
   ];
 
   const ADMIN_KEYS = [
-    'run_command',
+    'run_command', 'update_bot',
     'convert_file',
     'system_health', 'pm2_status', 'api_usage',
     'create_cron', 'list_crons', 'delete_cron',
@@ -610,8 +619,19 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
 
       // ── Shell ─────────────────────────────────────────────────────────────
       case 'run_command': {
+        const lowerCmd = args.command.toLowerCase();
+        if (lowerCmd.includes('update.sh') || lowerCmd.includes('pm2 restart')) {
+          return 'Command blocked. To update the bot or restart it, please use the `update_bot` tool instead.';
+        }
         const r = await runCommand(args.command);
         return r.output;
+      }
+
+      case 'update_bot': {
+        const { exec } = require('child_process');
+        // Detach the restart so the LLM gets this success string and replies to Telegram BEFORE the process dies.
+        exec('git pull && npm install && (sleep 3; pm2 restart rin) &');
+        return 'Update started: firmly pulling latest code from git, installing npm dependencies, and restarting the "rin" service in 3 seconds.';
       }
 
       // ── File system ───────────────────────────────────────────────────────
