@@ -30,6 +30,12 @@ const bot = createBot(db, { webhookRef });
 bot.launch().then(() => {
   console.log('[bot] Rin is online.');
 
+  bot.telegram.setMyCommands([
+    { command: 'help', description: 'List available commands and capabilities' },
+    { command: 'myfiles', description: 'List your uploaded files' },
+    { command: 'cancel', description: 'Cancel an ongoing request' }
+  ]).catch(err => console.error('[bot] Failed to set commands:', err));
+
   startPollers(db, bot.telegram);
   console.log('[poller] Reminder + health-check pollers started.');
 

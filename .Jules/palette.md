@@ -1,0 +1,3 @@
+## 2024-05-18 - Improve Telegram bot discoverability with native command menus
+**Learning:** Users often forget the specific commands available in a conversational interface since they rely on memory rather than recognition. Implementing native command menus (like Telegram's auto-complete command menu) significantly boosts discoverability and smooths out the interaction loop, as users don't need to ask for help or type exact command names.
+**Action:** Always map primary commands to the platform's native UI elements (e.g., bot command menus, quick replies, inline keyboards) rather than relying solely on raw text matching.
