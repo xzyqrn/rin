@@ -79,6 +79,11 @@ function _shouldForceToolGrounding(lastUserText, toolNames) {
   const text = String(lastUserText || '').toLowerCase();
   if (!text) return false;
 
+  const googleCapabilityIntent =
+    /\b(google|gmail|drive|calendar|tasks?|classroom)\b/i.test(text) &&
+    /\b(can you|capab|access|permissions?|what can you do|what can you access)\b/i.test(text);
+  if (googleCapabilityIntent && toolNames.has('google_capabilities')) return true;
+
   const googleIntent = /\b(google|gmail|email|inbox|calendar|schedule|meeting|drive|classroom|assignment|homework|task|to-?do)\b/i.test(text);
   if (googleIntent) {
     if (toolNames.has('google_auth_status')) return true;
@@ -111,18 +116,50 @@ function _looksLikeUnsupportedGoogleCapabilityClaim(text, toolNames) {
   if (!content) return false;
   if (!toolNames.has('google_auth_status')) return false;
 
-  const hasGoogleCapabilityMention = /\b(gmail|inbox|google classroom|classroom)\b/i.test(content);
-  if (!hasGoogleCapabilityMention) return false;
+  const mentionsGoogleService = /\b(google|drive|gmail|inbox|calendar|tasks?|classroom)\b/i.test(content);
+  if (!mentionsGoogleService) return false;
 
-  const privacyExcuse =
+  const privacyExcuseOrFalseRestriction =
     /\bprivacy\b/i.test(content) ||
     /\bsecurity feature\b/i.test(content) ||
     /\bcannot read\b.*\binbox\b/i.test(content) ||
+    /\bcannot access\b.*\binbox\b/i.test(content) ||
     /\bcan't read\b.*\binbox\b/i.test(content) ||
+    /\bsnippet access\b/i.test(content) ||
     /\bcannot access\b.*\bclassroom\b/i.test(content) ||
-    /\bcan't access\b.*\bclassroom\b/i.test(content);
+    /\bcan't access\b.*\bclassroom\b/i.test(content) ||
+    /\bview only\b/i.test(content);
 
-  return privacyExcuse;
+  const contradictsDriveCrud =
+    (toolNames.has('google_drive_create_file') || toolNames.has('google_drive_update_file') || toolNames.has('google_drive_delete_file')) &&
+    /\bdrive\b/i.test(content) &&
+    /\b(cannot|can't)\b[\s\S]{0,40}\b(create|add|edit|update|delete|modify)\b/i.test(content);
+
+  const contradictsCalendarCrud =
+    (toolNames.has('google_calendar_create_event') || toolNames.has('google_calendar_update_event') || toolNames.has('google_calendar_delete_event')) &&
+    /\bcalendar\b/i.test(content) &&
+    /\b(cannot|can't)\b[\s\S]{0,40}\b(create|add|edit|update|delete|modify)\b/i.test(content);
+
+  const contradictsTasksCrud =
+    (toolNames.has('google_tasks_create') || toolNames.has('google_tasks_update') || toolNames.has('google_tasks_delete')) &&
+    /\btask\b/i.test(content) &&
+    /\b(cannot|can't)\b[\s\S]{0,40}\b(create|add|edit|update|delete|modify)\b/i.test(content);
+
+  const contradictsGmailInboxRead =
+    toolNames.has('gmail_inbox_read') &&
+    /\b(gmail|inbox)\b/i.test(content) &&
+    (
+      /\b(cannot|can't)\b[\s\S]{0,40}\b(read|access)\b[\s\S]{0,20}\binbox\b/i.test(content) ||
+      /\bsnippet access\b/i.test(content)
+    );
+
+  return Boolean(
+    privacyExcuseOrFalseRestriction ||
+    contradictsDriveCrud ||
+    contradictsCalendarCrud ||
+    contradictsTasksCrud ||
+    contradictsGmailInboxRead
+  );
 }
 
 async function _runVerificationPass(currentMessages, signal) {
@@ -235,7 +272,8 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
             role: 'user',
             content:
               'Do not guess for this request. Use relevant tools now. ' +
-              'If this is a Google request and access is unavailable, call google_auth_status and include the exact relink URL.',
+              'If this is a Google capability/access request, call google_capabilities first. ' +
+              'If access is unavailable, call google_auth_status and include the exact relink URL.',
           });
           continue;
         }
@@ -247,8 +285,9 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
             role: 'user',
             content:
               'Your previous message made an unsupported Google capability claim. ' +
-              'Verify access by calling google_auth_status and relevant Google tools (gmail_read_unread and google_classroom_get_assignments when available). ' +
+              'Call google_capabilities and google_auth_status, then verify with relevant Google tools before answering. ' +
               'Do not cite generic privacy/security limitations. ' +
+              'Do not say "view-only" for a service if create/update/delete tools for that service are available. ' +
               'If access fails, report the real auth/scope error and provide the exact relink URL.',
           });
           continue;

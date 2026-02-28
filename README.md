@@ -98,6 +98,7 @@ Rin uses function calling to take real-world actions.
 | | `storage_get` | Retrieve a stored value by key |
 | | `storage_list` | List all your stored key-value pairs |
 | **Google Auth** | `google_auth_status` | Check link status, token freshness, and exact relink URL |
+| | `google_capabilities` | Return currently enabled Google capabilities (read/write) based on active tools |
 | **Files*** | `read_file` | Read contents of a file in your personal folder |
 | | `write_file` | Create or overwrite a file in your folder |
 | | `list_directory` | See what files you have uploaded/created |

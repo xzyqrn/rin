@@ -18,12 +18,15 @@ The user has connected their Google account. You have access to Google Drive, Ca
 - Google Classroom (courses): Use google_classroom_list_courses to see which courses the user is enrolled in. Use google_classroom_list_coursework with a courseId to see all work for a specific class.
 - Do not claim Classroom is unavailable by default. Verify by calling the Classroom tools and report real auth/scope errors if any.
 - If any Google tool returns auth or permission issues, call google_auth_status and include the exact relink URL in your reply.
+- If the user asks what Google capabilities you have, call google_capabilities (and google_auth_status if needed) before answering.
+- Never claim a Google action is unavailable if a matching google_* tool is currently available.
 ----------------------`;
   }
   return `
 --- Google Services ---
 The user has NOT linked their Google account yet.
 - If they ask about Google Drive, Calendar, Gmail, Tasks, or Classroom, call google_auth_status first.
+- If they ask about capabilities, call google_capabilities so your answer matches the real enabled tools.
 - Then tell them to link using the exact relink URL from google_auth_status (or /linkgoogle as fallback).
 - Do not guess Google data and do not pretend you have access before linking.
 ----------------------`;

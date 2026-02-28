@@ -264,6 +264,14 @@ const DEF = {
   },
 
   // ── Google Integrations ────────────────────────────────────────────────────
+  google_capabilities: {
+    type: 'function',
+    function: {
+      name: 'google_capabilities',
+      description: 'Return the currently available Google capabilities based on linked auth and enabled tools. Use when the user asks what Google actions you can do.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
   google_auth_status: {
     type: 'function',
     function: {
@@ -871,6 +879,8 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
     'set_reminder', 'list_reminders', 'delete_reminder',
     'save_note', 'get_notes', 'delete_note',
     'storage_set', 'storage_get', 'storage_delete', 'storage_list',
+    // Google capability map — always available
+    'google_capabilities',
     // Google auth status — always available (even before linking)
     'google_auth_status',
     // Google data tools — only when user has linked their Google account
@@ -1004,6 +1014,48 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
       case 'storage_list': return await storeList(db, userId);
 
       // ── Google Integrations ───────────────────────────────────────────────
+      case 'google_capabilities': {
+        const has = (name) => keys.includes(name);
+        const lines = [];
+        lines.push(`Google linked: ${hasGoogleAuth ? 'yes' : 'no'}`);
+
+        if (!hasGoogleAuth) {
+          lines.push('Google tools are currently locked until the account is linked.');
+          const relinkUrl = buildGoogleRelinkUrl(userId);
+          lines.push(relinkUrl ? `Link URL: ${relinkUrl}` : 'Link URL unavailable. Configure GOOGLE_OAUTH_BASE_URL and use /linkgoogle.');
+          return lines.join('\n');
+        }
+
+        lines.push(
+          `Drive: ${has('google_drive_list') ? 'view/list enabled' : 'view/list disabled'}; ` +
+          `create=${has('google_drive_create_file') ? 'yes' : 'no'}, ` +
+          `update=${has('google_drive_update_file') ? 'yes' : 'no'}, ` +
+          `delete=${has('google_drive_delete_file') ? 'yes' : 'no'}`
+        );
+        lines.push(
+          `Calendar: ${has('google_calendar_list') ? 'view/list enabled' : 'view/list disabled'}; ` +
+          `create=${has('google_calendar_create_event') ? 'yes' : 'no'}, ` +
+          `update=${has('google_calendar_update_event') ? 'yes' : 'no'}, ` +
+          `delete=${has('google_calendar_delete_event') ? 'yes' : 'no'}`
+        );
+        lines.push(
+          `Gmail: unread_read=${has('gmail_read_unread') ? 'yes' : 'no'}, ` +
+          `inbox_read_with_content=${has('gmail_inbox_read') ? 'yes' : 'no'}`
+        );
+        lines.push(
+          `Tasks: list=${has('google_tasks_list') ? 'yes' : 'no'}, ` +
+          `create=${has('google_tasks_create') ? 'yes' : 'no'}, ` +
+          `update=${has('google_tasks_update') ? 'yes' : 'no'}, ` +
+          `delete=${has('google_tasks_delete') ? 'yes' : 'no'}`
+        );
+        lines.push(
+          `Classroom: assignments=${has('google_classroom_get_assignments') ? 'yes' : 'no'}, ` +
+          `courses=${has('google_classroom_list_courses') ? 'yes' : 'no'}, ` +
+          `coursework_by_course=${has('google_classroom_list_coursework') ? 'yes' : 'no'}`
+        );
+        lines.push('Note: Classroom tools are read-focused in this build.');
+        return lines.join('\n');
+      }
       case 'google_auth_status': {
         const tokens = await getGoogleTokens(db, userId);
         const relinkUrl = buildGoogleRelinkUrl(userId);
