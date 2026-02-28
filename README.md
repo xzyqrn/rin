@@ -142,6 +142,17 @@ pm2 stop rin        # stop
 pm2 status          # overview of all processes
 ```
 
+### Updating the Bot
+
+When running in production, Rin does not automatically update itself. To fetch the latest changes from the repository and apply them:
+
+```bash
+cd /path/to/Rin
+git pull
+npm install
+pm2 restart rin
+```
+
 ---
 
 ## Reverse Proxy & HTTPS
@@ -447,4 +458,4 @@ sqlite> SELECT model, SUM(tokens_in + tokens_out) as total FROM api_metrics GROU
 
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
