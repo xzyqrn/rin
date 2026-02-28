@@ -240,8 +240,15 @@ function createBot(db, { webhookRef = null } = {}) {
 
   // ── Main text handler ──────────────────────────────────────────────────────
   bot.on('text', async (ctx) => {
-    const userMessage = ctx.message.text.trim();
+    let userMessage = ctx.message.text.trim();
     if (!userMessage || userMessage.startsWith('/')) return;
+
+    if (ctx.message.reply_to_message) {
+      const repliedText = ctx.message.reply_to_message.text || '[non-text message]';
+      const isBot = ctx.message.reply_to_message.from?.id === ctx.botInfo.id;
+      const repliedTo = isBot ? "your message" : "another message";
+      userMessage = `${userMessage}\n\n[Replying to ${repliedTo}: "${repliedText}"]`;
+    }
 
     const userId = ctx.from.id;
     const admin = isAdmin(ctx);
