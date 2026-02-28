@@ -305,14 +305,23 @@ function createBot(db, { webhookRef = null } = {}) {
   bot.command('status', async (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply("You don't have permission to do that.");
     const statusMsg = await ctx.reply('Fetching system status...');
-    const { getSystemHealth } = require('./capabilities/monitoring');
-    const health = await getSystemHealth();
-    await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      statusMsg.message_id,
-      undefined,
-      health
-    );
+    try {
+      const { getSystemHealth } = require('./capabilities/monitoring');
+      const health = await getSystemHealth();
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        undefined,
+        health
+      );
+    } catch (err) {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        undefined,
+        `❌ Error fetching status: ${err.message || 'Unknown error'}`
+      );
+    }
   });
 
   // ── Main text handler ──────────────────────────────────────────────────────
