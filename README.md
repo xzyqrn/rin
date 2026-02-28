@@ -196,7 +196,7 @@ Rin uses **Google Cloud Firestore**.
 | `OPENROUTER_API_KEY` | No | Key for OpenRouter (Alternative) |
 | `ADMIN_USER_ID` | Yes | Your Telegram ID (to enable admin tools) |
 | `WEBHOOK_BASE_URL` | Yes | Public URL for OAuth callbacks and webhooks |
-| `LLM_MODEL` | No | Model ID (Gemini default: `gemini-2.0-flash`) |
+| `LLM_MODEL` | No | Model ID (Gemini default: `gemini-2.5-flash`) |
 | `TIMEZONE` | No | Global system timezone (e.g., `Asia/Manila`) |
 
 *\*Google Gemini is the default provider. OpenRouter is supported as a fallback.*
