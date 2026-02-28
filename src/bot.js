@@ -52,7 +52,15 @@ function buildSystemMessage(facts, admin, userTimezone, hasGoogleAuth) {
 
 function _rowToMessage(row) {
   if (row.content.startsWith('user: ')) return { role: 'user', content: row.content.slice(6) };
-  if (row.content.startsWith('rin: ')) return { role: 'assistant', content: row.content.slice(5) };
+  if (row.content.startsWith('rin: ')) {
+    return { role: 'assistant', content: sanitizeAssistantReply(row.content.slice(5)) };
+  }
+  if (row.content.startsWith('assistant: ')) {
+    return { role: 'assistant', content: sanitizeAssistantReply(row.content.slice(11)) };
+  }
+  if (row.content.startsWith('bot: ')) {
+    return { role: 'assistant', content: sanitizeAssistantReply(row.content.slice(5)) };
+  }
   return { role: 'user', content: row.content };
 }
 
@@ -108,7 +116,7 @@ function isMultiStepRequest(text) {
 }
 
 async function sendLong(ctx, text) {
-  const safeText = String(text || '');
+  const safeText = sanitizeAssistantReply(text);
   const LIMIT = 4096;
   if (safeText.length <= LIMIT) { await ctx.reply(safeText); return; }
   let start = 0;
@@ -125,17 +133,23 @@ async function sendLong(ctx, text) {
 
 function sanitizeAssistantReply(text) {
   const original = String(text || '');
-  let out = original.trimStart();
+  let out = original
+    .replace(/\r\n/g, '\n')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .trimStart();
 
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 6; i++) {
     const next = out
       .replace(/^\*\*\s*rin\s*:\s*\*\*\s*/i, '')
-      .replace(/^rin\s*:\s*/i, '')
+      .replace(/^(?:\*\*|__)?\s*(?:rin|assistant|ai|bot)\s*(?:\*\*|__)?\s*[:\-]\s*/i, '')
+      .replace(/^\s*>+\s*(?:\*\*|__)?\s*(?:rin|assistant|ai|bot)\s*(?:\*\*|__)?\s*[:\-]\s*/i, '')
       .trimStart();
     if (next === out) break;
     out = next;
   }
 
+  out = out.replace(/\n{3,}/g, '\n\n').trim();
   return out || original.trim();
 }
 
