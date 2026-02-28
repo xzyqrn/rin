@@ -108,18 +108,35 @@ function isMultiStepRequest(text) {
 }
 
 async function sendLong(ctx, text) {
+  const safeText = String(text || '');
   const LIMIT = 4096;
-  if (text.length <= LIMIT) { await ctx.reply(text); return; }
+  if (safeText.length <= LIMIT) { await ctx.reply(safeText); return; }
   let start = 0;
-  while (start < text.length) {
+  while (start < safeText.length) {
     let end = start + LIMIT;
-    if (end < text.length) {
-      const lastNewline = text.lastIndexOf('\n', end);
+    if (end < safeText.length) {
+      const lastNewline = safeText.lastIndexOf('\n', end);
       if (lastNewline > start) end = lastNewline;
     }
-    await ctx.reply(text.slice(start, end));
+    await ctx.reply(safeText.slice(start, end));
     start = end;
   }
+}
+
+function sanitizeAssistantReply(text) {
+  const original = String(text || '');
+  let out = original.trimStart();
+
+  for (let i = 0; i < 3; i++) {
+    const next = out
+      .replace(/^\*\*\s*rin\s*:\s*\*\*\s*/i, '')
+      .replace(/^rin\s*:\s*/i, '')
+      .trimStart();
+    if (next === out) break;
+    out = next;
+  }
+
+  return out || original.trim();
 }
 
 /**
@@ -454,14 +471,15 @@ function createBot(db, { webhookRef = null } = {}) {
         activeRequests.delete(userId);
       }
 
-      await sendLong(ctx, reply);
+      const cleanedReply = sanitizeAssistantReply(reply);
+      await sendLong(ctx, cleanedReply);
 
       saveMemory(db, userId, `user: ${userMessage}`).catch(console.error);
-      saveMemory(db, userId, `rin: ${reply}`).catch(console.error);
+      saveMemory(db, userId, `rin: ${cleanedReply}`).catch(console.error);
 
       // Only extract facts for substantive, non-command messages
       if (userMessage.length > MIN_FACT_EXTRACTION_LENGTH && !userMessage.startsWith('/')) {
-        extractFacts(userMessage, reply)
+        extractFacts(userMessage, cleanedReply)
           .then(async (newFacts) => {
             for (const { key, value } of newFacts) {
               await upsertFact(db, userId, key, value).catch(console.error);
