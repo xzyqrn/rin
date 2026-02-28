@@ -12,6 +12,14 @@ function initDb() {
 
   const db = new Database(DB_PATH);
 
+  _createTables(db);
+  _runMigrations(db);
+
+  return db;
+}
+
+// ── Table Creation ─────────────────────────────────────────────────────────
+function _createTables(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS memory (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,13 +105,16 @@ function initDb() {
       PRIMARY KEY (user_id, window_start)
     );
   `);
+}
 
-  // ── Migrations ─────────────────────────────────────────────────────────────
+// ── Migrations ─────────────────────────────────────────────────────────────
+function _runMigrations(db) {
   const memCols = db.prepare('PRAGMA table_info(memory)').all().map((c) => c.name);
   if (!memCols.includes('user_id')) {
     db.exec('ALTER TABLE memory ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0');
     db.exec('CREATE INDEX IF NOT EXISTS idx_memory_user ON memory (user_id)');
   }
+
   const factCols = db.prepare('PRAGMA table_info(user_facts)').all().map((c) => c.name);
   if (!factCols.includes('user_id')) {
     db.exec('DROP TABLE IF EXISTS user_facts');
@@ -120,8 +131,6 @@ function initDb() {
   db.exec('CREATE INDEX IF NOT EXISTS idx_notes_user_updated ON notes (user_id, updated_at DESC)');
 
   db.exec('CREATE INDEX IF NOT EXISTS idx_api_metrics_timestamp ON api_metrics (timestamp, model)');
-
-  return db;
 }
 
 // ── Conversation memory ────────────────────────────────────────────────────────
