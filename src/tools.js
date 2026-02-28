@@ -186,7 +186,7 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_drive_list',
-      description: 'List recent files in the user\'s Google Drive.',
+      description: 'List recent files in the user\'s connected Google Drive. Use when the user asks about their files, documents, or wants to find something they saved.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -194,7 +194,7 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_calendar_list',
-      description: 'List upcoming events in the user\'s Google Calendar.',
+      description: 'List upcoming events from the user\'s Google Calendar. Use when the user asks about their schedule, meetings, appointments, or what\'s coming up.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -202,7 +202,7 @@ const DEF = {
     type: 'function',
     function: {
       name: 'gmail_read_unread',
-      description: 'List unread emails in the user\'s Gmail.',
+      description: 'List unread emails in the user\'s Gmail inbox. Use when the user asks about new emails, their inbox, or messages they\'ve received.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -210,7 +210,7 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_tasks_list',
-      description: 'List tasks in the user\'s Google Tasks.',
+      description: 'List tasks from the user\'s Google Tasks. Use when the user mentions to-do items, pending tasks, or things they need to do.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -218,7 +218,7 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_keep_list',
-      description: 'List notes in the user\'s Google Keep.',
+      description: 'List notes from the user\'s Google Keep. Use when the user asks about saved notes or quick memos in Keep.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -560,9 +560,10 @@ const DEF = {
  * @param {number} userId
  * @param {object} opts
  * @param {boolean} opts.admin - include admin-only tools (shell, files, cron, monitoring)
+ * @param {boolean} opts.hasGoogleAuth - include Google integration tools
  * @param {object}  opts.webhookService - { addWebhook, removeWebhook, listWebhooks } from webhook.js
  */
-function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
+function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookService = null } = {}) {
   const ALL_USER_KEYS = [
     // Meta-cognitive tools — always available
     'think', 'plan', 'reflect',
@@ -571,8 +572,8 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
     'set_reminder', 'list_reminders', 'delete_reminder',
     'save_note', 'get_notes', 'delete_note',
     'storage_set', 'storage_get', 'storage_delete', 'storage_list',
-    // Google integrations
-    'google_drive_list', 'google_calendar_list', 'gmail_read_unread', 'google_tasks_list', 'google_keep_list',
+    // Google integrations — only when user has linked their Google account
+    ...(hasGoogleAuth ? ['google_drive_list', 'google_calendar_list', 'gmail_read_unread', 'google_tasks_list', 'google_keep_list'] : []),
     // File operations, restricted to user's folder for non-admins
     'read_file', 'write_file', 'list_directory', 'delete_file', 'send_file',
   ];
