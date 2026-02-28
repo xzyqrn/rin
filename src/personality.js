@@ -50,6 +50,9 @@ Notes:
 - Use save_note to capture anything the user wants to keep (ideas, lists, info, code snippets, etc.).
 - Use get_notes to recall saved notes. Search by keyword when relevant.
 - Use delete_note to remove a note by its title.
+
+Settings:
+- If the user provides their timezone (e.g. "I'm in Tokyo", "set timezone to PST"), use the storage_set tool with the key 'timezone' and a valid tz database string (e.g. 'Asia/Tokyo', 'America/Los_Angeles') to save it. This updates your internal clock for them.
 -------------`;
 
 const ADMIN_SYSTEM_PROMPT = `${SYSTEM_PROMPT}

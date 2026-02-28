@@ -4,14 +4,14 @@ const nodeCron = require('node-cron');
 const { getAllEnabledCrons } = require('../database');
 
 // Module-level state — initialised once via initCron()
-let _db       = null;
+let _db = null;
 let _telegram = null;
 
 // Map of cronJob.id → node-cron task
 const _activeTasks = new Map();
 
 function initCron(db, telegram) {
-  _db       = db;
+  _db = db;
   _telegram = telegram;
   loadAll();
 }
@@ -32,7 +32,13 @@ function _schedule(job) {
     return false;
   }
   _stop(job.id); // replace if already running
-  const task = nodeCron.schedule(job.schedule, () => _run(job), { timezone: 'UTC' });
+
+  const { storageGet } = require('../database');
+  const userTz = storageGet(_db, job.user_id, 'timezone');
+  const tz = userTz || process.env.TIMEZONE || process.env.TZ || 'System Default';
+  const cronTz = tz === 'System Default' ? undefined : tz;
+
+  const task = nodeCron.schedule(job.schedule, () => _run(job), { timezone: cronTz });
   _activeTasks.set(job.id, task);
   return true;
 }
@@ -84,7 +90,7 @@ function addJob(db, userId, name, schedule, action, payload) {
 function removeJob(db, userId, name) {
   const { listCronJobs, deleteCronJob } = require('../database');
   const jobs = listCronJobs(db, userId);
-  const job  = jobs.find((j) => j.name === name);
+  const job = jobs.find((j) => j.name === name);
   if (!job) return false;
   _stop(job.id);
   return deleteCronJob(db, userId, name);

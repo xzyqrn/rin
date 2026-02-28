@@ -17,6 +17,7 @@ const {
   addReminder, getPendingReminders, deleteReminder,
   upsertNote, getNotes, deleteNote,
   listCronJobs, addHealthCheck, listHealthChecks, deleteHealthCheck,
+  storageGet
 } = require('./database');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -575,6 +576,16 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
   const definitions = keys.map((k) => DEF[k]);
 
   async function executor(toolName, args) {
+    function formatTime(ms) {
+      const userTz = storageGet(db, userId, 'timezone');
+      const tz = userTz || process.env.TIMEZONE || process.env.TZ || 'System Default';
+      try {
+        return new Date(ms).toLocaleString('en-US', { timeZone: tz === 'System Default' ? undefined : tz });
+      } catch (e) {
+        return new Date(ms).toLocaleString();
+      }
+    }
+
     switch (toolName) {
 
       // ── Web ───────────────────────────────────────────────────────────────
@@ -595,13 +606,13 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
         if (!fireAt || isNaN(fireAt)) return 'Could not parse the time — please try again.';
         if (fireAt <= Math.floor(Date.now() / 1000)) return 'That time is in the past.';
         const id = addReminder(db, userId, args.message, fireAt);
-        return `Reminder #${id} set for ${new Date(fireAt * 1000).toLocaleString()}: "${args.message}"`;
+        return `Reminder #${id} set for ${formatTime(fireAt * 1000)}: "${args.message}"`;
       }
 
       case 'list_reminders': {
         const rows = getPendingReminders(db, userId);
         if (!rows.length) return 'No pending reminders.';
-        return rows.map((r) => `#${r.id} — "${r.message}" at ${new Date(r.fire_at * 1000).toLocaleString()}`).join('\n');
+        return rows.map((r) => `#${r.id} — "${r.message}" at ${formatTime(r.fire_at * 1000)}`).join('\n');
       }
 
       case 'delete_reminder': {

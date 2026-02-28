@@ -2,11 +2,15 @@
 
 require('dotenv').config();
 
-const { initDb }             = require('./database');
-const { initLlm }            = require('./llm');
-const { createBot }          = require('./bot');
-const { startPollers }       = require('./poller');
-const { initCron }           = require('./capabilities/cron');
+if (process.env.TIMEZONE) {
+  process.env.TZ = process.env.TIMEZONE;
+}
+
+const { initDb } = require('./database');
+const { initLlm } = require('./llm');
+const { createBot } = require('./bot');
+const { startPollers } = require('./poller');
+const { initCron } = require('./capabilities/cron');
 const { startWebhookServer } = require('./webhook');
 
 // ── Env validation ─────────────────────────────────────────────────────────────
@@ -57,5 +61,5 @@ bot.launch().then(() => {
 });
 
 // ── Graceful shutdown ──────────────────────────────────────────────────────────
-process.once('SIGINT',  () => { console.log('[bot] Shutting down…'); bot.stop('SIGINT');  db.close(); });
+process.once('SIGINT', () => { console.log('[bot] Shutting down…'); bot.stop('SIGINT'); db.close(); });
 process.once('SIGTERM', () => { console.log('[bot] Shutting down…'); bot.stop('SIGTERM'); db.close(); });

@@ -7,7 +7,7 @@ const { buildTools } = require('./tools');
 const { runCommand } = require('./shell');
 const { checkAndIncrementRateLimit,
   saveMemory, getRecentMemories,
-  upsertFact, getAllFacts } = require('./database');
+  upsertFact, getAllFacts, storageGet } = require('./database');
 const { downloadTelegramFile, listUserUploads,
   fmtSize } = require('./capabilities/uploads');
 
@@ -30,12 +30,24 @@ function isAdmin(ctx) {
   return admin;
 }
 
-function buildSystemMessage(facts, admin) {
+function buildSystemMessage(facts, admin, userTimezone) {
   const base = admin ? ADMIN_SYSTEM_PROMPT : SYSTEM_PROMPT;
+
+  const tz = userTimezone || process.env.TIMEZONE || process.env.TZ || 'System Default';
+  let timeString;
+  try {
+    timeString = new Date().toLocaleString('en-US', { timeZone: tz === 'System Default' ? undefined : tz });
+  } catch (e) {
+    timeString = new Date().toLocaleString(); // Fallback if invalid
+  }
+
+  const timeInfo = `\n\n--- System Info ---\nCurrent System Time: ${timeString}\nTimezone: ${tz}\n-------------------`;
+  const promptWithTime = base + timeInfo;
+
   const entries = Object.entries(facts);
-  if (!entries.length) return base;
+  if (!entries.length) return promptWithTime;
   const lines = entries.map(([k, v]) => `  - ${k.replace(/_/g, ' ')}: ${v}`).join('\n');
-  return `${base}\n\n--- What you know about this user ---\n${lines}\n-------------------------------------`;
+  return `${promptWithTime}\n\n--- What you know about this user ---\n${lines}\n-------------------------------------`;
 }
 
 function _rowToMessage(row) {
@@ -195,9 +207,18 @@ function createBot(db, { webhookRef = null } = {}) {
     const userId = ctx.from.id;
     const files = listUserUploads(userId);
     if (!files.length) return ctx.reply('You haven\'t uploaded any files yet. Just send me a file!');
-    const lines = files.slice(0, 50).map((f, i) =>
-      `${i + 1}. ${f.name} (${fmtSize(f.size)}) — ${f.mtime.toLocaleString()}`
-    );
+    const lines = files.slice(0, 50).map((f, i) => {
+      const fDate = new Date(f.mtime);
+      const userTz = storageGet(db, userId, 'timezone');
+      const tz = userTz || process.env.TIMEZONE || process.env.TZ || 'System Default';
+      let ds;
+      try {
+        ds = fDate.toLocaleString('en-US', { timeZone: tz === 'System Default' ? undefined : tz });
+      } catch (e) {
+        ds = fDate.toLocaleString();
+      }
+      return `${i + 1}. ${f.name} (${fmtSize(f.size)}) — ${ds}`;
+    });
     return ctx.reply(`📁 Your uploads (${files.length} file${files.length !== 1 ? 's' : ''}):\n\n${lines.join('\n')}`);
   });
 
@@ -370,7 +391,8 @@ function createBot(db, { webhookRef = null } = {}) {
       const historyMessages = await buildMessageHistory(memories, controller.signal);
 
       // Inject a planning nudge for complex multi-step requests
-      let systemContent = buildSystemMessage(facts, admin);
+      const userTimezone = storageGet(db, userId, 'timezone');
+      let systemContent = buildSystemMessage(facts, admin, userTimezone);
       if (isMultiStepRequest(userMessage)) {
         systemContent += '\n\n[Hint] This request appears to involve multiple steps. Consider using the `think` and `plan` tools before acting.';
       }
