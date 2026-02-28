@@ -574,184 +574,168 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
   const keys = admin ? [...ADMIN_KEYS, ...ALL_USER_KEYS] : ALL_USER_KEYS;
   const definitions = keys.map((k) => DEF[k]);
 
-  async function executor(toolName, args) {
-    switch (toolName) {
+  const HANDLERS = {
+    // ── Web ───────────────────────────────────────────────────────────────
+    browse_url: async (args) => {
+      const r = await browseUrl(args.url);
+      if (r.error) return `Error: ${r.error}`;
+      return `Title: ${r.title}\n\n${r.text}`;
+    },
 
-      // ── Web ───────────────────────────────────────────────────────────────
-      case 'browse_url': {
-        const r = await browseUrl(args.url);
-        if (r.error) return `Error: ${r.error}`;
-        return `Title: ${r.title}\n\n${r.text}`;
+    // ── Reminders ─────────────────────────────────────────────────────────
+    set_reminder: (args) => {
+      let fireAt;
+      if (args.datetime) {
+        fireAt = Math.floor(new Date(args.datetime).getTime() / 1000);
+      } else {
+        fireAt = Math.floor(Date.now() / 1000) + Math.max(1, Number(args.delay_minutes) || 1) * 60;
       }
+      if (!fireAt || isNaN(fireAt)) return 'Could not parse the time — please try again.';
+      if (fireAt <= Math.floor(Date.now() / 1000)) return 'That time is in the past.';
+      const id = addReminder(db, userId, args.message, fireAt);
+      return `Reminder #${id} set for ${new Date(fireAt * 1000).toLocaleString()}: "${args.message}"`;
+    },
+    list_reminders: () => {
+      const rows = getPendingReminders(db, userId);
+      if (!rows.length) return 'No pending reminders.';
+      return rows.map((r) => `#${r.id} — "${r.message}" at ${new Date(r.fire_at * 1000).toLocaleString()}`).join('\n');
+    },
+    delete_reminder: (args) => {
+      const ok = deleteReminder(db, userId, Number(args.id));
+      return ok ? `Reminder #${args.id} cancelled.` : `No reminder with ID ${args.id}.`;
+    },
 
-      // ── Reminders ─────────────────────────────────────────────────────────
-      case 'set_reminder': {
-        let fireAt;
-        if (args.datetime) {
-          fireAt = Math.floor(new Date(args.datetime).getTime() / 1000);
-        } else {
-          fireAt = Math.floor(Date.now() / 1000) + Math.max(1, Number(args.delay_minutes) || 1) * 60;
+    // ── Notes ──────────────────────────────────────────────────────────────
+    save_note: (args) => {
+      upsertNote(db, userId, args.title, args.content);
+      return `Note "${args.title}" saved.`;
+    },
+    get_notes: (args) => {
+      const rows = getNotes(db, userId, args.search || null);
+      if (!rows.length) return args.search ? `No notes matching "${args.search}".` : 'No notes yet.';
+      return rows.map((n) => `[${n.title}]\n${n.content}`).join('\n\n---\n\n');
+    },
+    delete_note: (args) => {
+      const ok = deleteNote(db, userId, args.title);
+      return ok ? `Note "${args.title}" deleted.` : `No note titled "${args.title}".`;
+    },
+
+    // ── Storage ───────────────────────────────────────────────────────────
+    storage_set: (args) => storeSet(db, userId, args.key, args.value),
+    storage_get: (args) => storeGet(db, userId, args.key),
+    storage_delete: (args) => storeDel(db, userId, args.key),
+    storage_list: () => storeList(db, userId),
+
+    // ── Shell ─────────────────────────────────────────────────────────────
+    run_command: async (args) => {
+      const lowerCmd = args.command.toLowerCase();
+      if (lowerCmd.includes('update.sh') || lowerCmd.includes('pm2 restart')) {
+        return 'Command blocked. To update the bot or restart it, please use the `update_bot` tool instead.';
+      }
+      const r = await runCommand(args.command);
+      return r.output;
+    },
+    update_bot: () => {
+      const { execFile } = require('child_process');
+      // Use npm ci (lockfile-exact) instead of npm install to prevent supply-chain drift.
+      // Detach the restart so the LLM replies before the process dies.
+      execFile('bash', ['-c', 'git pull 2>&1 && npm ci 2>&1 && (sleep 3; pm2 restart rin) &'],
+        (err, stdout) => {
+          if (err) console.error('[update_bot] Error:', err.message);
+          else console.log('[update_bot] Output:', stdout);
         }
-        if (!fireAt || isNaN(fireAt)) return 'Could not parse the time — please try again.';
-        if (fireAt <= Math.floor(Date.now() / 1000)) return 'That time is in the past.';
-        const id = addReminder(db, userId, args.message, fireAt);
-        return `Reminder #${id} set for ${new Date(fireAt * 1000).toLocaleString()}: "${args.message}"`;
-      }
+      );
+      return 'Update started: pulling latest code, installing dependencies (lockfile-exact), and restarting in 3 seconds.';
+    },
 
-      case 'list_reminders': {
-        const rows = getPendingReminders(db, userId);
-        if (!rows.length) return 'No pending reminders.';
-        return rows.map((r) => `#${r.id} — "${r.message}" at ${new Date(r.fire_at * 1000).toLocaleString()}`).join('\n');
-      }
+    // ── File system ───────────────────────────────────────────────────────
+    read_file: (args) => { try { return readFile(getSafePath(args.path)); } catch (e) { return e.message; } },
+    write_file: (args) => { try { return writeFile(getSafePath(args.path), args.content); } catch (e) { return e.message; } },
+    list_directory: (args) => { try { return listDirectory(getSafePath(args.path)); } catch (e) { return e.message; } },
+    delete_file: (args) => { try { return deleteFile(getSafePath(args.path)); } catch (e) { return e.message; } },
+    convert_file: (args) => { try { return convertFile(getSafePath(args.path), args.format); } catch (e) { return e.message; } },
 
-      case 'delete_reminder': {
-        const ok = deleteReminder(db, userId, Number(args.id));
-        return ok ? `Reminder #${args.id} cancelled.` : `No reminder with ID ${args.id}.`;
-      }
+    // ── Monitoring ────────────────────────────────────────────────────────
+    system_health: async () => await getSystemHealth(),
+    pm2_status: async () => await getPm2Status(),
+    api_usage: (args) => getApiUsage(db, args.days || 7),
 
-      // ── Notes ──────────────────────────────────────────────────────────────
-      case 'save_note': {
-        upsertNote(db, userId, args.title, args.content);
-        return `Note "${args.title}" saved.`;
-      }
+    // ── Cron ──────────────────────────────────────────────────────────────
+    create_cron: (args) => {
+      const r = addJob(db, userId, args.name, args.schedule, args.action, args.payload);
+      return r.ok ? `Cron job "${args.name}" created (ID ${r.id}).` : `Error: ${r.error}`;
+    },
+    list_crons: () => {
+      const jobs = listCronJobs(db, userId);
+      if (!jobs.length) return 'No cron jobs.';
+      return jobs.map((j) =>
+        `[${j.id}] ${j.name} — ${j.schedule} | action: ${j.action} | ${j.enabled ? 'enabled' : 'disabled'}`
+      ).join('\n');
+    },
+    delete_cron: (args) => {
+      const ok = removeJob(db, userId, args.name);
+      return ok ? `Cron job "${args.name}" deleted.` : `No cron job named "${args.name}".`;
+    },
 
-      case 'get_notes': {
-        const rows = getNotes(db, userId, args.search || null);
-        if (!rows.length) return args.search ? `No notes matching "${args.search}".` : 'No notes yet.';
-        return rows.map((n) => `[${n.title}]\n${n.content}`).join('\n\n---\n\n');
-      }
+    // ── Health checks ──────────────────────────────────────────────────────
+    add_health_check: (args) => {
+      addHealthCheck(db, userId, args.name, args.url, args.interval_minutes || 5);
+      return `Health check "${args.name}" added for ${args.url} (every ${args.interval_minutes || 5} min).`;
+    },
+    list_health_checks: () => {
+      const rows = listHealthChecks(db, userId);
+      if (!rows.length) return 'No health checks configured.';
+      return rows.map((h) => {
+        const last = h.last_status ? `last: HTTP ${h.last_status}` : 'never checked';
+        return `[${h.name}] ${h.url} — every ${h.interval_minutes}m — ${last}`;
+      }).join('\n');
+    },
+    remove_health_check: (args) => {
+      const ok = deleteHealthCheck(db, userId, args.name);
+      return ok ? `Health check "${args.name}" removed.` : `No health check named "${args.name}".`;
+    },
 
-      case 'delete_note': {
-        const ok = deleteNote(db, userId, args.title);
-        return ok ? `Note "${args.title}" deleted.` : `No note titled "${args.title}".`;
-      }
+    // ── Webhooks ──────────────────────────────────────────────────────────
+    create_webhook: (args) => {
+      if (!webhookService) return 'Webhook server not running.';
+      const { url, token } = webhookService.addWebhook(userId, args.name, args.description || '');
+      return `Webhook "${args.name}" created.\nURL: ${url}\nPOST JSON to that URL and it will appear here.`;
+    },
+    list_webhooks: () => {
+      if (!webhookService) return 'Webhook server not running.';
+      const hooks = webhookService.listWebhooks(userId);
+      if (!hooks.length) return 'No webhooks configured.';
+      return hooks.map((h) => `[${h.name}] ${h.url}${h.description ? ' — ' + h.description : ''}`).join('\n');
+    },
+    delete_webhook: (args) => {
+      if (!webhookService) return 'Webhook server not running.';
+      const ok = webhookService.removeWebhook(userId, args.name);
+      return ok ? `Webhook "${args.name}" deleted.` : `No webhook named "${args.name}".`;
+    },
 
-      // ── Storage ───────────────────────────────────────────────────────────
-      case 'storage_set': return storeSet(db, userId, args.key, args.value);
-      case 'storage_get': return storeGet(db, userId, args.key);
-      case 'storage_delete': return storeDel(db, userId, args.key);
-      case 'storage_list': return storeList(db, userId);
-
-
-      // ── Shell ─────────────────────────────────────────────────────────────
-      case 'run_command': {
-        const lowerCmd = args.command.toLowerCase();
-        if (lowerCmd.includes('update.sh') || lowerCmd.includes('pm2 restart')) {
-          return 'Command blocked. To update the bot or restart it, please use the `update_bot` tool instead.';
-        }
-        const r = await runCommand(args.command);
-        return r.output;
-      }
-
-      case 'update_bot': {
-        const { execFile } = require('child_process');
-        // Use npm ci (lockfile-exact) instead of npm install to prevent supply-chain drift.
-        // Detach the restart so the LLM replies before the process dies.
-        execFile('bash', ['-c', 'git pull 2>&1 && npm ci 2>&1 && (sleep 3; pm2 restart rin) &'],
-          (err, stdout) => {
-            if (err) console.error('[update_bot] Error:', err.message);
-            else console.log('[update_bot] Output:', stdout);
-          }
+    // ── Send file to Telegram ──────────────────────────────────────────────
+    send_file: async (args) => {
+      try {
+        const filePath = getSafePath(args.path, 'send_file');
+        const chatId = userId; // send back to the same user
+        await sendTelegramFile(
+          process.env.TELEGRAM_BOT_TOKEN,
+          chatId,
+          filePath,
+          args.caption || undefined
         );
-        return 'Update started: pulling latest code, installing dependencies (lockfile-exact), and restarting in 3 seconds.';
+        return `File sent successfully: ${path.basename(filePath)}`;
+      } catch (err) {
+        return `Failed to send file: ${err.message}`;
       }
-
-      // ── File system ───────────────────────────────────────────────────────
-      case 'read_file':
-        try { return readFile(getSafePath(args.path)); } catch (e) { return e.message; }
-      case 'write_file':
-        try { return writeFile(getSafePath(args.path), args.content); } catch (e) { return e.message; }
-      case 'list_directory':
-        try { return listDirectory(getSafePath(args.path)); } catch (e) { return e.message; }
-      case 'delete_file':
-        try { return deleteFile(getSafePath(args.path)); } catch (e) { return e.message; }
-      case 'convert_file':
-        try { return convertFile(getSafePath(args.path), args.format); } catch (e) { return e.message; }
-
-      // ── Monitoring ────────────────────────────────────────────────────────
-      case 'system_health': return await getSystemHealth();
-      case 'pm2_status': return await getPm2Status();
-      case 'api_usage': return getApiUsage(db, args.days || 7);
-
-      // ── Cron ──────────────────────────────────────────────────────────────
-      case 'create_cron': {
-        const r = addJob(db, userId, args.name, args.schedule, args.action, args.payload);
-        return r.ok ? `Cron job "${args.name}" created (ID ${r.id}).` : `Error: ${r.error}`;
-      }
-
-      case 'list_crons': {
-        const jobs = listCronJobs(db, userId);
-        if (!jobs.length) return 'No cron jobs.';
-        return jobs.map((j) =>
-          `[${j.id}] ${j.name} — ${j.schedule} | action: ${j.action} | ${j.enabled ? 'enabled' : 'disabled'}`
-        ).join('\n');
-      }
-
-      case 'delete_cron': {
-        const ok = removeJob(db, userId, args.name);
-        return ok ? `Cron job "${args.name}" deleted.` : `No cron job named "${args.name}".`;
-      }
-
-      // ── Health checks ──────────────────────────────────────────────────────
-      case 'add_health_check': {
-        addHealthCheck(db, userId, args.name, args.url, args.interval_minutes || 5);
-        return `Health check "${args.name}" added for ${args.url} (every ${args.interval_minutes || 5} min).`;
-      }
-
-      case 'list_health_checks': {
-        const rows = listHealthChecks(db, userId);
-        if (!rows.length) return 'No health checks configured.';
-        return rows.map((h) => {
-          const last = h.last_status ? `last: HTTP ${h.last_status}` : 'never checked';
-          return `[${h.name}] ${h.url} — every ${h.interval_minutes}m — ${last}`;
-        }).join('\n');
-      }
-
-      case 'remove_health_check': {
-        const ok = deleteHealthCheck(db, userId, args.name);
-        return ok ? `Health check "${args.name}" removed.` : `No health check named "${args.name}".`;
-      }
-
-      // ── Webhooks ──────────────────────────────────────────────────────────
-      case 'create_webhook': {
-        if (!webhookService) return 'Webhook server not running.';
-        const { url, token } = webhookService.addWebhook(userId, args.name, args.description || '');
-        return `Webhook "${args.name}" created.\nURL: ${url}\nPOST JSON to that URL and it will appear here.`;
-      }
-
-      case 'list_webhooks': {
-        if (!webhookService) return 'Webhook server not running.';
-        const hooks = webhookService.listWebhooks(userId);
-        if (!hooks.length) return 'No webhooks configured.';
-        return hooks.map((h) => `[${h.name}] ${h.url}${h.description ? ' — ' + h.description : ''}`).join('\n');
-      }
-
-      case 'delete_webhook': {
-        if (!webhookService) return 'Webhook server not running.';
-        const ok = webhookService.removeWebhook(userId, args.name);
-        return ok ? `Webhook "${args.name}" deleted.` : `No webhook named "${args.name}".`;
-      }
-
-      // ── Send file to Telegram ──────────────────────────────────────────────
-      case 'send_file': {
-        try {
-          const filePath = getSafePath(args.path, 'send_file');
-          const chatId = userId; // send back to the same user
-          await sendTelegramFile(
-            process.env.TELEGRAM_BOT_TOKEN,
-            chatId,
-            filePath,
-            args.caption || undefined
-          );
-          return `File sent successfully: ${path.basename(filePath)}`;
-        } catch (err) {
-          return `Failed to send file: ${err.message}`;
-        }
-      }
-
-      default:
-        return `Unknown tool: ${toolName}`;
     }
+  };
+
+  async function executor(toolName, args) {
+    if (HANDLERS[toolName]) {
+      return await HANDLERS[toolName](args);
+    }
+    return `Unknown tool: ${toolName}`;
   }
 
   return { definitions, executor };
