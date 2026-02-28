@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const crypto  = require('crypto');
+const crypto = require('crypto');
 
 /**
  * Start an Express HTTP server for incoming webhooks.
@@ -25,13 +25,45 @@ function _checkWebhookRateLimit(token) {
 
 function startWebhookServer(db, telegram) {
   const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
-  const app  = express();
+  const app = express();
 
   app.use(express.json({ limit: '1mb' }));
   app.use(express.text({ limit: '1mb' }));
 
   // Health check
   app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
+
+  // Google OAuth Auth URL
+  app.get('/auth/google', (req, res) => {
+    const { state } = req.query; // Expect userId to be passed here
+    if (!state) return res.status(400).send('Missing user state');
+    try {
+      const { getAuthUrl } = require('./capabilities/google');
+      const url = getAuthUrl(state);
+      res.redirect(url);
+    } catch (e) {
+      res.status(500).send(`Setup incomplete: ${e.message}`);
+    }
+  });
+
+  // Google OAuth Callback
+  app.get('/auth/google/callback', async (req, res) => {
+    const { code, state, error } = req.query;
+    if (error) return res.status(400).send(`Auth error: ${error}`);
+    if (!code || !state) return res.status(400).send('Missing code or state');
+
+    try {
+      const { handleCallback } = require('./capabilities/google');
+      await handleCallback(db, code, parseInt(state, 10));
+
+      // Notify the user via Telegram
+      await telegram.sendMessage(parseInt(state, 10), '✅ Google Account successfully linked! You can now use Google tools.');
+      res.send('Authorization successful. You can close this window and return to Telegram.');
+    } catch (err) {
+      console.error('[webhook] Error in google callback:', err);
+      res.status(500).send('Internal Server Error during authorization.');
+    }
+  });
 
   // Incoming webhook
   app.post('/webhook/:token', async (req, res) => {

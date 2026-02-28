@@ -146,6 +146,7 @@ function createBot(db, { webhookRef = null } = {}) {
       '/start — Introduction message',
       '/help — Show this help message',
       '/myfiles — List your uploaded files',
+      '/linkgoogle — Link your Google account',
       '/cancel — Cancel an ongoing request',
     ];
     if (admin) {
@@ -200,6 +201,23 @@ function createBot(db, { webhookRef = null } = {}) {
       return ctx.reply('Cancelled the current request.');
     }
     return ctx.reply('Nothing to cancel — no active request.');
+  });
+
+  // ── /linkgoogle — link user Google account ──────────────────────────────────
+  bot.command('linkgoogle', (ctx) => {
+    const userId = ctx.from.id;
+    const baseUrl = process.env.WEBHOOK_BASE_URL;
+    if (!baseUrl) {
+      return ctx.reply('WEBHOOK_BASE_URL is not configured. Ask the administrator to set it up.');
+    }
+    const authUrl = `${baseUrl}/api/auth/google?state=${userId}`;
+    return ctx.reply('🔗 Click the button below to securely link your Google account to Rin.', {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: 'Link Google Account', web_app: { url: authUrl } }
+        ]]
+      }
+    });
   });
 
   // ── /myfiles — list the user's uploaded files ──────────────────────────────

@@ -42,6 +42,7 @@ bot.launch().then(() => {
     { command: 'start', description: 'Introduction message' },
     { command: 'help', description: 'Show help message' },
     { command: 'myfiles', description: 'List your uploaded files' },
+    { command: 'linkgoogle', description: 'Link your Google account' },
     { command: 'cancel', description: 'Cancel an ongoing request' }
   ]).catch(err => console.error('[bot] Failed to set commands:', err.message));
 

@@ -19,6 +19,13 @@ const {
   listCronJobs, addHealthCheck, listHealthChecks, deleteHealthCheck,
   storageGet
 } = require('./database');
+const {
+  listDriveFiles,
+  listEvents,
+  listUnreadEmails,
+  listTasks,
+  listKeepNotes
+} = require('./capabilities/google');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tool schema definitions
@@ -170,6 +177,48 @@ const DEF = {
     function: {
       name: 'storage_list',
       description: 'List all keys and values in local storage.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+
+  // ── Google Integrations ────────────────────────────────────────────────────
+  google_drive_list: {
+    type: 'function',
+    function: {
+      name: 'google_drive_list',
+      description: 'List recent files in the user\'s Google Drive.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  google_calendar_list: {
+    type: 'function',
+    function: {
+      name: 'google_calendar_list',
+      description: 'List upcoming events in the user\'s Google Calendar.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  gmail_read_unread: {
+    type: 'function',
+    function: {
+      name: 'gmail_read_unread',
+      description: 'List unread emails in the user\'s Gmail.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  google_tasks_list: {
+    type: 'function',
+    function: {
+      name: 'google_tasks_list',
+      description: 'List tasks in the user\'s Google Tasks.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  google_keep_list: {
+    type: 'function',
+    function: {
+      name: 'google_keep_list',
+      description: 'List notes in the user\'s Google Keep.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -522,6 +571,8 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
     'set_reminder', 'list_reminders', 'delete_reminder',
     'save_note', 'get_notes', 'delete_note',
     'storage_set', 'storage_get', 'storage_delete', 'storage_list',
+    // Google integrations
+    'google_drive_list', 'google_calendar_list', 'gmail_read_unread', 'google_tasks_list', 'google_keep_list',
     // File operations, restricted to user's folder for non-admins
     'read_file', 'write_file', 'list_directory', 'delete_file', 'send_file',
   ];
@@ -642,6 +693,42 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       case 'storage_get': return storeGet(db, userId, args.key);
       case 'storage_delete': return storeDel(db, userId, args.key);
       case 'storage_list': return storeList(db, userId);
+
+      // ── Google Integrations ───────────────────────────────────────────────
+      case 'google_drive_list':
+        try {
+          const files = await listDriveFiles(db, userId);
+          if (!files.length) return 'No files found in Drive.';
+          return files.map(f => `- ${f.name} (ID: ${f.id})`).join('\n');
+        } catch (e) { return e.message; }
+      case 'google_calendar_list':
+        try {
+          const events = await listEvents(db, userId);
+          if (!events.length) return 'No upcoming events found.';
+          return events.map(e => `- ${e.summary} at ${e.start.dateTime || e.start.date}`).join('\n');
+        } catch (e) { return e.message; }
+      case 'gmail_read_unread':
+        try {
+          const emails = await listUnreadEmails(db, userId);
+          if (!emails.length) return 'No unread emails.';
+          return emails.map(m => {
+            const subject = m.payload.headers.find(h => h.name === 'Subject')?.value || 'No Subject';
+            const from = m.payload.headers.find(h => h.name === 'From')?.value || 'Unknown';
+            return `- ${subject} (From: ${from})`;
+          }).join('\n');
+        } catch (e) { return e.message; }
+      case 'google_tasks_list':
+        try {
+          const tasks = await listTasks(db, userId);
+          if (!tasks.length) return 'No tasks found.';
+          return tasks.map(t => `- ${t.title}`).join('\n');
+        } catch (e) { return e.message; }
+      case 'google_keep_list':
+        try {
+          const notes = await listKeepNotes(db, userId);
+          if (!notes.length) return 'No notes found.';
+          return notes.map(n => `- ${n.title}\n${n.body?.text?.text || ''}`).join('\n\n');
+        } catch (e) { return e.message; }
 
 
       // ── Shell ─────────────────────────────────────────────────────────────

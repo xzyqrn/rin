@@ -3,9 +3,28 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const admin = require('firebase-admin');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'rin.db');
+const FIREBASE_SERVICE_ACCOUNT_PATH = path.join(__dirname, '..', 'firebase-service-account.json');
+
+let firestoreDB = null;
+
+if (fs.existsSync(FIREBASE_SERVICE_ACCOUNT_PATH)) {
+  try {
+    const serviceAccount = require(FIREBASE_SERVICE_ACCOUNT_PATH);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    firestoreDB = admin.firestore();
+    console.log('[firebase] Initialized Firebase Admin SDK');
+  } catch (error) {
+    console.error('[firebase] Failed to initialize Firebase:', error);
+  }
+} else {
+  console.warn('[firebase] No firebase-service-account.json found. Firebase features will be disabled.');
+}
 
 // ⚡ Bolt: Cache prepared statements on the database instance to avoid reparsing SQL on every call.
 function getStmt(db, sql) {
@@ -113,6 +132,13 @@ function _createTables(db) {
       window_start INTEGER NOT NULL,
       count        INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (user_id, window_start)
+    );
+
+    CREATE TABLE IF NOT EXISTS google_auth (
+      user_id       INTEGER PRIMARY KEY,
+      access_token  TEXT NOT NULL,
+      refresh_token TEXT,
+      expiry_date   INTEGER NOT NULL
     );
   `);
 }
@@ -340,6 +366,55 @@ function checkAndIncrementRateLimit(db, userId, limitPerHour) {
   return allowed;
 }
 
+// ── Google OAuth Tokens (Firebase) ─────────────────────────────────────────────
+
+async function saveGoogleTokens(db, userId, tokens) {
+  if (!firestoreDB) {
+    console.error('[firebase] Cannot save Google tokens: Firebase is not initialized.');
+    return;
+  }
+
+  try {
+    const docRef = firestoreDB.collection('google_auth').doc(String(userId));
+
+    // We only update refresh_token if it's provided in the new tokens object.
+    const updateData = {
+      access_token: tokens.access_token || '',
+      expiry_date: tokens.expiry_date || 0,
+      updated_at: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (tokens.refresh_token) {
+      updateData.refresh_token = tokens.refresh_token;
+    }
+
+    await docRef.set(updateData, { merge: true });
+  } catch (error) {
+    console.error(`[firebase] Error saving tokens for user ${userId}:`, error);
+  }
+}
+
+async function getGoogleTokens(db, userId) {
+  if (!firestoreDB) {
+    console.error('[firebase] Cannot get Google tokens: Firebase is not initialized.');
+    return null;
+  }
+
+  try {
+    const docRef = firestoreDB.collection('google_auth').doc(String(userId));
+    const doc = await docRef.get();
+
+    if (doc.exists) {
+      return doc.data();
+    } else {
+      return null;
+    }
+  } catch (error) {
+    console.error(`[firebase] Error getting tokens for user ${userId}:`, error);
+    return null;
+  }
+}
+
 module.exports = {
   initDb,
   saveMemory, getRecentMemories,
@@ -351,4 +426,5 @@ module.exports = {
   addHealthCheck, listHealthChecks, deleteHealthCheck, getHealthChecksToRun, updateHealthCheckStatus,
   logApiCall, getApiUsageSummary,
   checkAndIncrementRateLimit,
+  saveGoogleTokens, getGoogleTokens,
 };
