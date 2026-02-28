@@ -275,9 +275,30 @@ function createBot(db, { webhookRef = null } = {}) {
     if (!isAdmin(ctx)) return ctx.reply("You don't have permission to do that.");
     const command = ctx.message.text.replace(/^\/shell\s*/i, '').trim();
     if (!command) return ctx.reply('Usage: /shell <command>');
-    await ctx.reply(`Running: \`${command}\``, { parse_mode: 'Markdown' });
+
+    const statusMsg = await ctx.reply(`Running: \`${command}\``, { parse_mode: 'Markdown' });
     const result = await runCommand(command);
-    await sendLong(ctx, `\`\`\`\n${result.output}\n\`\`\``);
+
+    const outputText = `\`$ ${command}\`\n\`\`\`\n${result.output}\n\`\`\``;
+
+    if (outputText.length <= 4096) {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        undefined,
+        outputText,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        undefined,
+        `Finished: \`${command}\``,
+        { parse_mode: 'Markdown' }
+      );
+      await sendLong(ctx, `\`\`\`\n${result.output}\n\`\`\``);
+    }
   });
 
   // ── /status — quick health summary (admin) ─────────────────────────────────
