@@ -511,17 +511,40 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
     'set_reminder', 'list_reminders', 'delete_reminder',
     'save_note', 'get_notes', 'delete_note',
     'storage_set', 'storage_get', 'storage_delete', 'storage_list',
+    // File operations, restricted to user's folder for non-admins
+    'read_file', 'write_file', 'list_directory', 'delete_file', 'send_file',
   ];
 
   const ADMIN_KEYS = [
     'run_command',
-    'read_file', 'write_file', 'list_directory', 'delete_file', 'convert_file',
+    'convert_file',
     'system_health', 'pm2_status', 'api_usage',
     'create_cron', 'list_crons', 'delete_cron',
     'add_health_check', 'list_health_checks', 'remove_health_check',
     'create_webhook', 'list_webhooks', 'delete_webhook',
-    'send_file',
   ];
+
+  function getSafePath(inputPath, fileOp = '') {
+    const userDir = path.resolve(UPLOADS_DIR, String(userId));
+
+    if (admin) {
+      if (fileOp === 'send_file' && inputPath && !path.isAbsolute(inputPath)) {
+        return path.join(userDir, inputPath);
+      }
+      return inputPath || '.';
+    }
+
+    // Non-admin logic
+    const safeInput = String(inputPath || '');
+    const relativeInput = safeInput.replace(/^[\/\\]+/, '');
+    const resolvedPath = path.resolve(userDir, relativeInput);
+
+    const relativeFromUserDir = path.relative(userDir, resolvedPath);
+    if (relativeFromUserDir && (relativeFromUserDir.startsWith('..') || path.isAbsolute(relativeFromUserDir))) {
+      throw new Error('Access denied: Path is outside your designated folder.');
+    }
+    return resolvedPath;
+  }
 
   const keys = admin ? [...ALL_USER_KEYS, ...ADMIN_KEYS] : ALL_USER_KEYS;
   const definitions = keys.map((k) => DEF[k]);
@@ -592,11 +615,16 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       }
 
       // ── File system ───────────────────────────────────────────────────────
-      case 'read_file': return readFile(args.path);
-      case 'write_file': return writeFile(args.path, args.content);
-      case 'list_directory': return listDirectory(args.path || '.');
-      case 'delete_file': return deleteFile(args.path);
-      case 'convert_file': return convertFile(args.path, args.format);
+      case 'read_file':
+        try { return readFile(getSafePath(args.path)); } catch (e) { return e.message; }
+      case 'write_file':
+        try { return writeFile(getSafePath(args.path), args.content); } catch (e) { return e.message; }
+      case 'list_directory':
+        try { return listDirectory(getSafePath(args.path)); } catch (e) { return e.message; }
+      case 'delete_file':
+        try { return deleteFile(getSafePath(args.path)); } catch (e) { return e.message; }
+      case 'convert_file':
+        return convertFile(args.path, args.format);
 
       // ── Monitoring ────────────────────────────────────────────────────────
       case 'system_health': return await getSystemHealth();
@@ -664,13 +692,9 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
 
       // ── Send file to Telegram ──────────────────────────────────────────────
       case 'send_file': {
-        // Resolve path: if it's not absolute, search the user's uploads folder
-        let filePath = args.path;
-        if (!path.isAbsolute(filePath)) {
-          filePath = path.join(UPLOADS_DIR, String(userId), filePath);
-        }
-        const chatId = userId; // send back to the same user
         try {
+          const filePath = getSafePath(args.path, 'send_file');
+          const chatId = userId; // send back to the same user
           await sendTelegramFile(
             process.env.TELEGRAM_BOT_TOKEN,
             chatId,
