@@ -7,7 +7,7 @@ const { buildTools } = require('./tools');
 const { runCommand } = require('./shell');
 const { checkAndIncrementRateLimit,
   saveMemory, getRecentMemories,
-  upsertFact, getAllFacts, storageGet } = require('./database');
+  upsertFact, getAllFacts, storageGet, getGoogleTokens } = require('./database');
 const { downloadTelegramFile, listUserUploads,
   fmtSize } = require('./capabilities/uploads');
 
@@ -30,8 +30,8 @@ function isAdmin(ctx) {
   return admin;
 }
 
-function buildSystemMessage(facts, admin, userTimezone) {
-  const base = admin ? ADMIN_SYSTEM_PROMPT : SYSTEM_PROMPT;
+function buildSystemMessage(facts, admin, userTimezone, hasGoogleAuth) {
+  const base = admin ? ADMIN_SYSTEM_PROMPT({ hasGoogleAuth }) : SYSTEM_PROMPT({ hasGoogleAuth });
 
   const tz = userTimezone || process.env.TIMEZONE || process.env.TZ || 'System Default';
   let timeString;
@@ -405,12 +405,16 @@ function createBot(db, { webhookRef = null } = {}) {
       const facts = await getAllFacts(db, userId);
       const memories = await getRecentMemories(db, userId, MEMORY_TURNS);
 
+      // Check whether the user has linked their Google account
+      const googleTokens = await getGoogleTokens(db, userId);
+      const hasGoogleAuth = googleTokens !== null;
+
       // Build history (may include a compressed summary of older turns)
       const historyMessages = await buildMessageHistory(memories, controller.signal);
 
       // Inject a planning nudge for complex multi-step requests
       const userTimezone = await storageGet(db, userId, 'timezone');
-      let systemContent = buildSystemMessage(facts, admin, userTimezone);
+      let systemContent = buildSystemMessage(facts, admin, userTimezone, hasGoogleAuth);
       if (isMultiStepRequest(userMessage)) {
         systemContent += '\n\n[Hint] This request appears to involve multiple steps. Consider using the `think` and `plan` tools before acting.';
       }
@@ -443,7 +447,7 @@ function createBot(db, { webhookRef = null } = {}) {
 
       let reply;
       try {
-        const tools = buildTools(db, userId, { admin, webhookService: webhookRef?.current ?? null });
+        const tools = buildTools(db, userId, { admin, hasGoogleAuth, webhookService: webhookRef?.current ?? null });
         reply = await chatWithTools(messages, tools.definitions, tools.executor, { signal: controller.signal });
       } finally {
         clearInterval(typingInterval);
