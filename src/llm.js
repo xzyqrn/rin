@@ -2,7 +2,7 @@
 
 const OpenAI = require('openai');
 
-const MODEL = process.env.LLM_MODEL || 'arcee-ai/trinity-large-preview:free';
+const MODEL = process.env.LLM_MODEL || 'gemini-2.5-flash';
 
 const useGeminiNative = !!process.env.GEMINI_API_KEY;
 
