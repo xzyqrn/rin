@@ -19,7 +19,7 @@ function initDb() {
       content   TEXT NOT NULL,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE INDEX IF NOT EXISTS idx_memory_user ON memory (user_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_user_id ON memory (user_id, id DESC);
 
     CREATE TABLE IF NOT EXISTS user_facts (
       user_id INTEGER NOT NULL DEFAULT 0,
@@ -36,6 +36,7 @@ function initDb() {
       created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
     );
     CREATE INDEX IF NOT EXISTS idx_reminders_fire ON reminders (fire_at);
+    CREATE INDEX IF NOT EXISTS idx_reminders_user_fire ON reminders (user_id, fire_at ASC);
 
     CREATE TABLE IF NOT EXISTS notes (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +47,7 @@ function initDb() {
       updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
       UNIQUE(user_id, title)
     );
-    CREATE INDEX IF NOT EXISTS idx_notes_user ON notes (user_id);
+    CREATE INDEX IF NOT EXISTS idx_notes_user_updated ON notes (user_id, updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS storage (
       user_id    INTEGER NOT NULL,
@@ -87,6 +88,7 @@ function initDb() {
       tokens_in  INTEGER NOT NULL DEFAULT 0,
       tokens_out INTEGER NOT NULL DEFAULT 0
     );
+    CREATE INDEX IF NOT EXISTS idx_api_metrics_timestamp ON api_metrics (timestamp, model);
 
     CREATE TABLE IF NOT EXISTS rate_limits (
       user_id      INTEGER NOT NULL,
@@ -107,6 +109,17 @@ function initDb() {
     db.exec('DROP TABLE IF EXISTS user_facts');
     db.exec('CREATE TABLE user_facts (user_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (user_id, key))');
   }
+
+  // ── Performance Indexes Migration ───────────────────────────────────────────
+  db.exec('DROP INDEX IF EXISTS idx_memory_user');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_memory_user_id ON memory (user_id, id DESC)');
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_reminders_user_fire ON reminders (user_id, fire_at ASC)');
+
+  db.exec('DROP INDEX IF EXISTS idx_notes_user');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_notes_user_updated ON notes (user_id, updated_at DESC)');
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_api_metrics_timestamp ON api_metrics (timestamp, model)');
 
   return db;
 }
