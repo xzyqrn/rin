@@ -8,22 +8,42 @@ const execFileAsync = promisify(execFile);
 const MAX_OUTPUT_CHARS = 3500;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-const DEFAULT_DENYLIST = ['rm -rf /', 'mkfs', 'dd if='];
-const SHELL_DENYLIST = (process.env.SHELL_DENYLIST || DEFAULT_DENYLIST.join(','))
+// Built-in regex deny patterns — harder to bypass than string matching.
+// These block the most destructive commands regardless of SHELL_DENYLIST env.
+const BUILTIN_DENY_PATTERNS = [
+  /\brm\s+.*-[a-z]*r[a-z]*\s*\/\b/i,      // rm -rf / and variants (rm -r /, rm -Rf /, etc.)
+  /\brm\s+.*--recursive.*\s*\/\b/i,        // rm --recursive / variants
+  /\bmkfs\b/i,                              // format filesystems
+  /\bdd\s+if=/i,                            // disk destroy
+  /\bcrontab\s+-r\b/i,                      // wipe all cron jobs
+  /\bshred\b.*\/dev\//i,                    // shred raw disk device
+  /\bwipefs\b/i,                            // wipe filesystem signatures
+  />\s*\/dev\/(sd[a-z]|nvme[0-9]|hd[a-z])\b/, // redirect into raw disk
+];
+
+const EXTRA_DENYLIST = (process.env.SHELL_DENYLIST || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
-async function runCommand(command, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  // Check denylist
+function isDenied(command) {
+  for (const pattern of BUILTIN_DENY_PATTERNS) {
+    if (pattern.test(command)) return true;
+  }
   const lower = command.toLowerCase();
-  for (const denied of SHELL_DENYLIST) {
-    if (lower.includes(denied.toLowerCase())) {
-      console.warn('[shell] Blocked denied command:', command);
-      return {
-        success: false,
-        exitCode: null,
-        output: 'Command blocked by security policy.',
-      };
-    }
+  for (const denied of EXTRA_DENYLIST) {
+    if (lower.includes(denied.toLowerCase())) return true;
+  }
+  return false;
+}
+
+async function runCommand(command, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  // Check deny patterns
+  if (isDenied(command)) {
+    console.warn('[shell] Blocked denied command:', command);
+    return {
+      success: false,
+      exitCode: null,
+      output: 'Command blocked by security policy.',
+    };
   }
 
   console.log(`[shell] Executing: ${command}`);

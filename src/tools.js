@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 const { runCommand } = require('./shell');
 const { browseUrl } = require('./capabilities/web');
 const { readFile, writeFile, listDirectory,
@@ -552,6 +553,21 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
     if (relativeFromUserDir && (relativeFromUserDir.startsWith('..') || path.isAbsolute(relativeFromUserDir))) {
       throw new Error('Access denied: Path is outside your designated folder.');
     }
+
+    // Resolve symlinks to prevent escaping the sandbox via a symlink planted
+    // inside the user directory. Skip for new paths that don't exist yet (writes).
+    try {
+      const realResolved = fs.realpathSync(resolvedPath);
+      const realUserDir = fs.realpathSync(userDir);
+      const realRelative = path.relative(realUserDir, realResolved);
+      if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+        throw new Error('Access denied: Path is outside your designated folder.');
+      }
+    } catch (e) {
+      if (e.message.startsWith('Access denied')) throw e;
+      // ENOENT = path doesn't exist yet (write ops) — allow it
+    }
+
     return resolvedPath;
   }
 
@@ -628,10 +644,16 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       }
 
       case 'update_bot': {
-        const { exec } = require('child_process');
-        // Detach the restart so the LLM gets this success string and replies to Telegram BEFORE the process dies.
-        exec('git pull && npm install && (sleep 3; pm2 restart rin) &');
-        return 'Update started: firmly pulling latest code from git, installing npm dependencies, and restarting the "rin" service in 3 seconds.';
+        const { execFile } = require('child_process');
+        // Use npm ci (lockfile-exact) instead of npm install to prevent supply-chain drift.
+        // Detach the restart so the LLM replies before the process dies.
+        execFile('bash', ['-c', 'git pull 2>&1 && npm ci 2>&1 && (sleep 3; pm2 restart rin) &'],
+          (err, stdout) => {
+            if (err) console.error('[update_bot] Error:', err.message);
+            else console.log('[update_bot] Output:', stdout);
+          }
+        );
+        return 'Update started: pulling latest code, installing dependencies (lockfile-exact), and restarting in 3 seconds.';
       }
 
       // ── File system ───────────────────────────────────────────────────────
