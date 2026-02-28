@@ -204,19 +204,32 @@ function createBot(db, { webhookRef = null } = {}) {
   // ── Shared file-receive helper ─────────────────────────────────────────────
   async function handleFileMessage(ctx, fileId, originalName, label) {
     const userId = ctx.from.id;
+    let statusMsg;
     try {
-      await ctx.reply(`📥 Receiving your ${label}…`);
+      statusMsg = await ctx.reply(`📥 Receiving your ${label}…`);
       const { saveName, fileSize } = await downloadTelegramFile(
         process.env.TELEGRAM_BOT_TOKEN, fileId, userId, originalName
       );
-      await ctx.reply(
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        undefined,
         `✅ Saved! \`${saveName}\` (${fmtSize(fileSize)}) is in your folder on the VPS.\n` +
         `Use /myfiles to see everything you\'ve uploaded.`,
         { parse_mode: 'Markdown' }
       );
     } catch (err) {
       console.error('[uploads] Failed to save file:', err.message || err);
-      await ctx.reply('❌ Sorry, I couldn\'t save that file. Please try again.');
+      if (statusMsg) {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMsg.message_id,
+          undefined,
+          '❌ Sorry, I couldn\'t save that file. Please try again.'
+        );
+      } else {
+        await ctx.reply('❌ Sorry, I couldn\'t save that file. Please try again.');
+      }
     }
   }
 
