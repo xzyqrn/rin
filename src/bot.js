@@ -23,7 +23,11 @@ const MIN_FACT_EXTRACTION_LENGTH = 20;
 // Per-user AbortController map for /cancel support
 const activeRequests = new Map();
 
-function isAdmin(ctx) { return ADMIN_IDS.includes(ctx.from?.id); }
+function isAdmin(ctx) {
+  const fromId = ctx.from?.id;
+  const admin = ADMIN_IDS.includes(fromId);
+  return admin;
+}
 
 function buildSystemMessage(facts, admin) {
   const base = admin ? ADMIN_SYSTEM_PROMPT : SYSTEM_PROMPT;
@@ -135,11 +139,42 @@ function createBot(db, { webhookRef = null } = {}) {
       lines.push('/shell <cmd> — Execute a shell command directly');
       lines.push('/status — Quick system health snapshot');
     }
-    lines.push('\nI can also browse the web, set reminders, save notes, and store key-value data — just ask naturally.');
+    if (!admin) {
+      lines.push(
+        '\nI can help you with a wide range of tasks:\n',
+        'Information & Research',
+        '- Find and summarize information from the web',
+        '- Explain concepts in simple terms',
+        '- Help with research and fact-checking\n',
+        'Writing & Editing',
+        '- Draft emails, articles, stories, or scripts',
+        '- Edit and proofread text',
+        '- Brainstorm ideas and outlines\n',
+        'Analysis & Problem-Solving',
+        '- Break down complex problems',
+        '- Analyze data or text',
+        '- Help with coding concepts and debugging\n',
+        'Tools & Organization',
+        '- Set reminders and manage tasks',
+        '- Save and retrieve notes',
+        '- Help with planning and scheduling\n',
+        'Creative & Casual',
+        '- Brainstorm creative ideas',
+        '- Play word games',
+        '- Have interesting conversations\n',
+        'Technical Help',
+        '- Explain how things work',
+        '- Help with documentation',
+        '- Suggest approaches to technical problems'
+      );
+    } else {
+      lines.push('\nI can also browse the web, set reminders, save notes, and store key-value data — just ask naturally.');
+    }
     if (admin) {
       lines.push('As an admin, I can manage cron jobs, health checks, webhooks, files, and monitor the server.');
     }
-    return ctx.reply(lines.join('\n'));
+    const helpText = lines.join('\n');
+    return ctx.reply(helpText);
   });
 
   // ── /cancel — abort an ongoing LLM request ────────────────────────────────
