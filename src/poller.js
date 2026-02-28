@@ -63,7 +63,7 @@ function startPollers(db, telegram) {
     try {
       const usersSnapshot = await db.collection('users').get();
       if (usersSnapshot.empty) return;
-      const cutoff = String(Math.floor(Date.now() / 3600000) * 3600 - 86400 * 7);
+      const cutoff = String(Math.floor(Date.now() / 1000) - 86400 * 7);
       for (const userDoc of usersSnapshot.docs) {
         const rateLimitsSnapshot = await userDoc.ref.collection('rate_limits').get();
         if (rateLimitsSnapshot.empty) continue;
