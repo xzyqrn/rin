@@ -108,7 +108,7 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       // DEBUG LOGGING
       try {
-        fs.writeFileSync('/tmp/llm_payload.json', JSON.stringify({ model: MODEL, messages: current, tools: (toolDefs || []).length }));
+        require('fs').writeFileSync('/tmp/llm_payload.json', JSON.stringify({ model: MODEL, messages: current, tools: (toolDefs || []).length }));
       } catch (e) { }
 
       const completion = await _retryCreate({
