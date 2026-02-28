@@ -11,7 +11,17 @@ let firestoreDB = null;
 
 if (envJson) {
   try {
-    const serviceAccount = JSON.parse(envJson);
+    // If the JSON is multi-line in .env, some loaders only get the first line.
+    // We check if it looks incomplete and try to find where it might be in the full env.
+    let fullJson = envJson;
+    if (fullJson.trim().startsWith('{') && !fullJson.trim().endsWith('}')) {
+      // Deep search for the closing brace if the env loader truncated it
+      const rawEnv = fs.readFileSync(path.join(__dirname, '..', '.env'), 'utf8');
+      const match = rawEnv.match(/FIREBASE_SERVICE_ACCOUNT_JSON=({[\s\S]*?\n})/);
+      if (match) fullJson = match[1];
+    }
+
+    const serviceAccount = JSON.parse(fullJson);
     if (serviceAccount.private_key) {
       serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
     }
@@ -19,9 +29,9 @@ if (envJson) {
       credential: admin.credential.cert(serviceAccount)
     });
     firestoreDB = admin.firestore();
-    console.log('[firebase] Initialized Firebase Admin SDK');
+    console.log('[firebase] Initialized Firebase Admin SDK from environment');
   } catch (error) {
-    console.error('[firebase] Failed to initialize Firebase:', error);
+    console.error('[firebase] Failed to initialize Firebase from environment:', error.message);
   }
 } else if (fs.existsSync(FIREBASE_SERVICE_ACCOUNT_PATH)) {
   try {
