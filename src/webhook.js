@@ -12,6 +12,17 @@ const crypto  = require('crypto');
  * @param {object} telegram - Telegraf telegram instance
  * @returns {{ app, server, addWebhook, removeWebhook, listWebhooks }}
  */
+// Per-token in-memory rate limit: max 60 requests per minute.
+const _webhookRateLimits = new Map();
+function _checkWebhookRateLimit(token) {
+  const now = Math.floor(Date.now() / 60000);
+  const entry = _webhookRateLimits.get(token) || { count: 0, windowStart: now };
+  if (entry.windowStart !== now) { entry.count = 0; entry.windowStart = now; }
+  entry.count++;
+  _webhookRateLimits.set(token, entry);
+  return entry.count <= 60;
+}
+
 function startWebhookServer(db, telegram) {
   const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
   const app  = express();
@@ -25,6 +36,11 @@ function startWebhookServer(db, telegram) {
   // Incoming webhook
   app.post('/webhook/:token', async (req, res) => {
     const { token } = req.params;
+
+    if (!_checkWebhookRateLimit(token)) {
+      return res.status(429).json({ error: 'Rate limit exceeded. Max 60 requests/minute per webhook.' });
+    }
+
     const hook = db.prepare('SELECT * FROM webhooks WHERE token = ? AND enabled = 1').get(token);
 
     if (!hook) return res.status(404).json({ error: 'Unknown webhook' });
