@@ -1,6 +1,6 @@
 # Rin — Telegram AI Bot
 
-A personal Telegram bot powered by **Google Gemini 2.5 Flash**. Rin is an **autonomous agent** that remembers you across conversations, manages server tasks, browses the web, schedules reminders, monitors uptime, and integrates with your Google Workspace.
+A personal Telegram bot powered by **Google Gemini 2.5 Flash Lite**. Rin is an **autonomous agent** that remembers you across conversations, manages server tasks, browses the web, schedules reminders, monitors uptime, and integrates with your Google Workspace.
 
 ---
 
@@ -26,7 +26,7 @@ A personal Telegram bot powered by **Google Gemini 2.5 Flash**. Rin is an **auto
 - **Autonomous Agency** — Rin uses a Reasoning loop (Think → Plan → Act → Reflect) to handle complex, multi-step requests.
 - **Persistent Memory** — Memory of conversation history and extracted user facts are stored in Firestore, so Rin "knows" you across restarts.
 - **Per-User Isolation** — Every user has their own private memory, notes, reminders, files, and sandboxed storage.
-- **Google Workspace Integration** — Securely link your Google account to interact with Drive, Calendar, Gmail, Tasks, Keep, and Classroom.
+- **Google Workspace Integration** — Securely link your Google account to interact with Drive, Calendar, Gmail, Tasks, and Classroom.
 - **File Handling** — Upload any file (photo, video, doc, voice); Rin saves it to a per-user directory on the VPS and can read/write/list or send them back to you.
 - **Monitoring & Automation** — Schedule recurring cron jobs, monitor URL health, and track system status (CPU, RAM, Disk).
 - **Webhooks** — Create custom endpoints to receive data from external services directly in your Telegram chat.
@@ -60,11 +60,11 @@ A personal Telegram bot powered by **Google Gemini 2.5 Flash**. Rin is an **auto
 │   ├── shell.js                Safe shell execution (timeout, output cap, denylist)
 │   ├── tools.js                Tool definitions, schema, and executor dispatcher
 │   ├── poller.js               Background loops — reminders + health checks
-│   ├── webhook.js              Express server for webhooks and Google OAuth
+│   ├── webhook.js              Express server for webhooks (legacy OAuth endpoints forward to webview)
 │   └── capabilities/
 │       ├── web.js              Web browsing and URL validation
 │       ├── files.js            File operations (read/write/list/delete/convert)
-│       ├── google.js           Google API integrations (OAuth, Drive, Gmail, etc.)
+│       ├── google.js           Google API integrations (token-backed Drive, Gmail, Calendar, etc.)
 │       ├── cron.js             Recurring task scheduler
 │       ├── monitoring.js       System health, PM2 status, API usage metrics
 │       ├── storage.js          Per-user key-value store
@@ -97,6 +97,7 @@ Rin uses function calling to take real-world actions.
 | **Storage** | `storage_set` | Save a persistent key-value pair (e.g. "favorite_color") |
 | | `storage_get` | Retrieve a stored value by key |
 | | `storage_list` | List all your stored key-value pairs |
+| **Google Auth** | `google_auth_status` | Check link status, token freshness, and exact relink URL |
 | **Files*** | `read_file` | Read contents of a file in your personal folder |
 | | `write_file` | Create or overwrite a file in your folder |
 | | `list_directory` | See what files you have uploaded/created |
@@ -106,7 +107,6 @@ Rin uses function calling to take real-world actions.
 | | `gmail_read_unread` | Check your Gmail inbox for unread messages |
 | | `google_tasks_list` | List items in your Google Tasks |
 | | `google_classroom_...` | List Classroom courses and assignments |
-| | `google_keep_list` | List notes from Google Keep (Enterprise/Workspace only) |
 
 *\*All file operations for non-admin users are strictly sandboxed to their dedicated `uploads/<user_id>` directory.*
 
@@ -195,11 +195,13 @@ Rin uses **Google Cloud Firestore**.
 | `GEMINI_API_KEY` | Yes* | Key for Google Gemini (Primary/Recommended) |
 | `OPENROUTER_API_KEY` | No | Key for OpenRouter (Alternative) |
 | `ADMIN_USER_ID` | Yes | Your Telegram ID (to enable admin tools) |
-| `WEBHOOK_BASE_URL` | Yes | Public URL for OAuth callbacks and webhooks |
-| `LLM_MODEL` | No | Model ID (Gemini default: `gemini-2.5-flash`) |
+| `GOOGLE_OAUTH_BASE_URL` | Yes** | Canonical webview base URL that serves `/api/auth/google/*` |
+| `WEBHOOK_BASE_URL` | Yes | Public URL for webhook endpoints only (`/webhook/:token`) |
+| `LLM_MODEL` | No | Model ID (default: `gemini-2.5-flash-lite`) |
 | `TIMEZONE` | No | Global system timezone (e.g., `Asia/Manila`) |
 
 *\*Google Gemini is the default provider. OpenRouter is supported as a fallback.*
+*\*\*Required for Google linking flow from `/linkgoogle`.*
 
 ---
 
@@ -216,8 +218,9 @@ Rin uses **Google Cloud Firestore**.
 - **`Doc already exists`**: Conflict when creating a webhook or cron job with a duplicate name.
 
 ### Google Integration
-- **`User not authenticated. Run /linkgoogle first.`**: You attempted a Google tool without linking your account.
-- **`Missing code or state`**: The OAuth callback URL was accessed directly without starting a flow from Telegram.
+- **`Google account is not linked for this user.`**: Run `/linkgoogle` or call `google_auth_status` to get the exact relink URL.
+- **`Google authentication expired or was revoked.`**: Relink your Google account and approve permissions again.
+- **`Google denied this request due to missing permissions/scopes.`**: Relink and grant full requested scopes on consent screen.
 - **`Auth error: access_denied`**: You declined the permissions on the Google consent screen.
 
 ### Terminal & Shell

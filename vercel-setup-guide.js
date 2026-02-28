@@ -33,8 +33,14 @@ function showVercelConfig() {
         },
         {
             name: 'NEXT_PUBLIC_BASE_URL',
-            value: 'https://rin-xzyqrn.vercel.app',
+            value: process.env.NEXT_PUBLIC_BASE_URL,
             description: 'Public base URL for the application',
+            type: 'Plain Text'
+        },
+        {
+            name: 'GOOGLE_OAUTH_BASE_URL',
+            value: process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL,
+            description: 'Canonical OAuth owner URL used by /linkgoogle',
             type: 'Plain Text'
         }
     ];
@@ -61,11 +67,13 @@ function showVercelConfig() {
     
     console.log('\n🔍 REDIRECT URI CONFIGURATION:\n');
     console.log('Make sure this is added to Google Cloud Console:');
-    console.log('https://rin-xzyqrn.vercel.app/api/auth/google/callback');
+    const oauthBase = process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || 'https://your-vercel-app.vercel.app';
+    console.log(`${oauthBase.replace(/\/+$/, '')}/api/auth/google/callback`);
     
     console.log('\n⚠️  IMPORTANT NOTES:');
     console.log('- FIREBASE_SERVICE_ACCOUNT_JSON should be the complete JSON string');
     console.log('- GOOGLE_CLIENT_SECRET should be marked as "Secret" in Vercel');
+    console.log('- GOOGLE_OAUTH_BASE_URL must point to the same app that serves /api/auth/google/*');
     console.log('- After configuring, redeploy the application');
     console.log('- Check Vercel Function Logs for debugging output');
 }

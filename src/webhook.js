@@ -26,6 +26,7 @@ function _checkWebhookRateLimit(token) {
 function startWebhookServer(db, telegram) {
   const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
   const app = express();
+  const oauthBase = (process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 
   app.use(express.json({ limit: '1mb' }));
   app.use(express.text({ limit: '1mb' }));
@@ -33,36 +34,27 @@ function startWebhookServer(db, telegram) {
   // Health check
   app.get('/health', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
 
-  // Google OAuth Auth URL
+  // Google OAuth Auth URL (deprecated in Node runtime, forwarded to Vercel owner)
   app.get('/api/auth/google', (req, res) => {
-    const { state } = req.query; // Expect userId to be passed here
-    if (!state) return res.status(400).send('Missing user state');
-    try {
-      const { getAuthUrl } = require('./capabilities/google');
-      const url = getAuthUrl(state);
-      res.redirect(url);
-    } catch (e) {
-      res.status(500).send(`Setup incomplete: ${e.message}`);
+    if (!oauthBase) {
+      return res.status(410).send('Google OAuth now lives on the webview service. Configure GOOGLE_OAUTH_BASE_URL and use /linkgoogle.');
     }
+    const target = new URL(`${oauthBase}/api/auth/google`);
+    if (req.query?.state) target.searchParams.set('state', String(req.query.state));
+    return res.redirect(308, target.toString());
   });
 
-  // Google OAuth Callback
-  app.get('/auth/google/callback', async (req, res) => {
-    const { code, state, error } = req.query;
-    if (error) return res.status(400).send(`Auth error: ${error}`);
-    if (!code || !state) return res.status(400).send('Missing code or state');
-
-    try {
-      const { handleCallback } = require('./capabilities/google');
-      await handleCallback(db, code, parseInt(state, 10));
-
-      // Notify the user via Telegram
-      await telegram.sendMessage(parseInt(state, 10), '✅ Google Account successfully linked! You can now use Google tools.');
-      res.send('Authorization successful. You can close this window and return to Telegram.');
-    } catch (err) {
-      console.error('[webhook] Error in google callback:', err);
-      res.status(500).send('Internal Server Error during authorization.');
+  // Google OAuth Callback (deprecated in Node runtime, forwarded to Vercel owner)
+  app.get(['/auth/google/callback', '/api/auth/google/callback'], async (req, res) => {
+    if (!oauthBase) {
+      return res.status(410).send('Google OAuth callback moved to the webview service. Configure GOOGLE_OAUTH_BASE_URL and update Google redirect URIs.');
     }
+    const target = new URL(`${oauthBase}/api/auth/google/callback`);
+    for (const [key, value] of Object.entries(req.query || {})) {
+      if (value === undefined || value === null) continue;
+      target.searchParams.set(key, String(value));
+    }
+    return res.redirect(308, target.toString());
   });
 
   // Incoming webhook

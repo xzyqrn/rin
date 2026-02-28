@@ -2,7 +2,7 @@
 
 const OpenAI = require('openai');
 
-const MODEL = process.env.LLM_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.LLM_MODEL || 'gemini-2.5-flash-lite';
 
 const useGeminiNative = !!process.env.GEMINI_API_KEY;
 
@@ -64,6 +64,59 @@ function _looksLikeToolCodeLeak(text) {
   return false;
 }
 
+function _getToolNames(toolDefs) {
+  return new Set((toolDefs || []).map((t) => t?.function?.name).filter(Boolean));
+}
+
+function _getLastUserText(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user') return String(messages[i].content || '');
+  }
+  return '';
+}
+
+function _shouldForceToolGrounding(lastUserText, toolNames) {
+  const text = String(lastUserText || '').toLowerCase();
+  if (!text) return false;
+
+  const googleIntent = /\b(google|gmail|email|inbox|calendar|schedule|meeting|drive|classroom|assignment|homework|task|to-?do)\b/i.test(text);
+  if (googleIntent) {
+    if (toolNames.has('google_auth_status')) return true;
+    if (
+      toolNames.has('google_calendar_list') ||
+      toolNames.has('gmail_read_unread') ||
+      toolNames.has('google_drive_list') ||
+      toolNames.has('google_tasks_list') ||
+      toolNames.has('google_classroom_get_assignments')
+    ) return true;
+  }
+
+  const reminderIntent = /\b(remind|reminder)\b/i.test(text);
+  if (reminderIntent && toolNames.has('set_reminder')) return true;
+
+  const notesIntent = /\b(save (this|that)|take a note|remember this|note\b)\b/i.test(text);
+  if (notesIntent && (toolNames.has('save_note') || toolNames.has('get_notes'))) return true;
+
+  const fileIntent = /\b(my files|list files|directory|folder|uploaded)\b/i.test(text);
+  if (fileIntent && (toolNames.has('list_directory') || toolNames.has('read_file'))) return true;
+
+  const systemIntent = /\b(check server|system status|cpu|memory|pm2|logs?)\b/i.test(text);
+  if (systemIntent && (toolNames.has('run_command') || toolNames.has('system_health'))) return true;
+
+  return false;
+}
+
+async function _runVerificationPass(currentMessages, signal) {
+  const verifyPrompt = {
+    role: 'user',
+    content:
+      'Run a strict final verification pass on your previous answer against the completed tool results. ' +
+      'If anything is missing or vague, revise it now. Return only the final answer.',
+  };
+  const verified = await chat([...currentMessages, verifyPrompt], { signal });
+  return verified && verified.trim() ? verified.trim() : '';
+}
+
 /**
  * Compress a list of old conversation messages into a single summary string.
  * Used when the conversation history grows too large.
@@ -115,9 +168,15 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
 
   const MAX_ROUNDS = 12;
   let current = [...messages];
+  const toolNames = _getToolNames(toolDefs);
+  const initialUserText = _getLastUserText(messages);
+  const shouldForceToolGrounding = _shouldForceToolGrounding(initialUserText, toolNames);
+  let groundingNudgeUsed = false;
 
   // Track the plan if Rin produces one, so we can display progress
   let activePlan = null;
+  let externalToolCalls = 0;
+  let verificationPassDone = false;
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -149,8 +208,27 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
           return await chat(messages, { signal });
         }
 
+        if (!groundingNudgeUsed && shouldForceToolGrounding && externalToolCalls === 0) {
+          groundingNudgeUsed = true;
+          current.push(msg);
+          current.push({
+            role: 'user',
+            content:
+              'Do not guess for this request. Use relevant tools now. ' +
+              'If this is a Google request and access is unavailable, call google_auth_status and include the exact relink URL.',
+          });
+          continue;
+        }
+
         if (!content && activePlan) {
           return 'Done — all planned steps completed.';
+        }
+
+        const needsVerification = !verificationPassDone && (externalToolCalls > 1 || (activePlan && activePlan.length > 1));
+        if (needsVerification) {
+          verificationPassDone = true;
+          const verified = await _runVerificationPass([...current, msg], signal);
+          if (verified) return verified;
         }
         return content;
       }
@@ -186,6 +264,7 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
             // ── Real external tools ──────────────────────────────────────────
             console.log(`[Rin] 🛠️  Executing: ${toolName}(${JSON.stringify(args)})`);
             result = String(await executor(toolName, args));
+            externalToolCalls++;
             console.log(`[Rin] ✅ Finished: ${toolName}`);
           }
         } catch (err) {

@@ -4,14 +4,15 @@ export function getOAuth2Client() {
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
-    // Use production URL for Vercel, localhost for development
-    let baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+    // Canonical OAuth owner base URL in production.
+    let baseUrl = process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL;
     if (!baseUrl) {
         if (process.env.NODE_ENV === 'development') {
             baseUrl = 'http://localhost:3000';
-        } else {
-            baseUrl = 'https://rin-xzyqrn.vercel.app';
         }
+    }
+    if (!baseUrl) {
+        throw new Error('GOOGLE_OAUTH_BASE_URL or NEXT_PUBLIC_BASE_URL must be set');
     }
 
     const redirectUri = `${baseUrl}/api/auth/google/callback`;

@@ -33,6 +33,11 @@ function showDeploymentChecklist() {
             name: 'NEXT_PUBLIC_BASE_URL',
             status: !!process.env.NEXT_PUBLIC_BASE_URL,
             critical: true
+        },
+        {
+            name: 'GOOGLE_OAUTH_BASE_URL',
+            status: !!(process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL),
+            critical: true
         }
     ];
     
@@ -56,6 +61,7 @@ function showDeploymentChecklist() {
     console.log('   - Go to Project > Settings > Environment Variables');
     console.log('   - Add all variables from the checklist above');
     console.log('   - Set GOOGLE_CLIENT_SECRET as "Secret"');
+    console.log('   - Set GOOGLE_OAUTH_BASE_URL to your webview/Vercel app URL');
     console.log('   - Select Production, Preview, and Development environments');
     
     console.log('\n2. Deploy to Vercel:');
@@ -69,7 +75,8 @@ function showDeploymentChecklist() {
     
     console.log('\n🔍 REDIRECT URI CONFIGURATION:');
     console.log('Make sure this is in Google Cloud Console:');
-    console.log('https://rin-xzyqrn.vercel.app/api/auth/google/callback');
+    const oauthBase = process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || 'https://your-vercel-app.vercel.app';
+    console.log(`${oauthBase.replace(/\/+$/, '')}/api/auth/google/callback`);
     
     console.log('\n📊 DEBUGGING TIPS:');
     console.log('- Check Vercel Function Logs for detailed debugging');

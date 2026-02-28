@@ -385,10 +385,10 @@ async function saveGoogleTokens(db, userId, tokens) {
 
   try {
     const updateData = {
-      access_token: tokens.access_token || '',
-      expiry_date: tokens.expiry_date || 0,
       updated_at: admin.firestore.FieldValue.serverTimestamp()
     };
+    if (tokens.access_token) updateData.access_token = tokens.access_token;
+    if (typeof tokens.expiry_date === 'number') updateData.expiry_date = tokens.expiry_date;
     if (tokens.refresh_token) {
       updateData.refresh_token = tokens.refresh_token;
     }
@@ -416,7 +416,7 @@ async function getGoogleTokens(db, userId) {
     if (doc.exists) {
       const tokenData = doc.data();
 
-      if (tokenData.access_token) {
+      if (tokenData.access_token || tokenData.refresh_token) {
         return {
           access_token: tokenData.access_token,
           refresh_token: tokenData.refresh_token,

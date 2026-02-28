@@ -17,7 +17,7 @@ const {
   addReminder, getPendingReminders, deleteReminder,
   upsertNote, getNotes, deleteNote,
   listCronJobs, addHealthCheck, listHealthChecks, deleteHealthCheck,
-  storageGet
+  storageGet, getGoogleTokens
 } = require('./database');
 const {
   listDriveFiles,
@@ -28,6 +28,76 @@ const {
   listCoursework,
   listUpcomingAssignments,
 } = require('./capabilities/google');
+
+function getGoogleOAuthBaseUrl() {
+  return (process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+}
+
+function buildGoogleRelinkUrl(userId) {
+  const base = getGoogleOAuthBaseUrl();
+  if (!base) return '';
+  return `${base}/api/auth/google?state=${encodeURIComponent(String(userId))}`;
+}
+
+function formatGoogleAuthStatus(tokens) {
+  if (!tokens || (!tokens.access_token && !tokens.refresh_token)) {
+    return 'not linked';
+  }
+
+  const hasRefresh = Boolean(tokens.refresh_token);
+  const expiry = Number(tokens.expiry_date || 0);
+  if (!expiry) {
+    return hasRefresh ? 'linked (token expiry unknown, refresh token present)' : 'linked (token expiry unknown, refresh token missing)';
+  }
+
+  const msLeft = expiry - Date.now();
+  const minsLeft = Math.floor(msLeft / 60000);
+  if (msLeft <= 0) {
+    return hasRefresh ? 'linked (access token expired, refresh token present)' : 'linked (access token expired, refresh token missing)';
+  }
+  if (minsLeft < 60) {
+    return hasRefresh ? `linked (token expires in ~${minsLeft}m, refresh token present)` : `linked (token expires in ~${minsLeft}m, refresh token missing)`;
+  }
+  const hoursLeft = Math.floor(minsLeft / 60);
+  return hasRefresh ? `linked (token expires in ~${hoursLeft}h, refresh token present)` : `linked (token expires in ~${hoursLeft}h, refresh token missing)`;
+}
+
+function normalizeGoogleError(err, userId) {
+  const relinkUrl = buildGoogleRelinkUrl(userId);
+  const relinkHint = relinkUrl
+    ? `Relink: ${relinkUrl}`
+    : 'Relink: use /linkgoogle after GOOGLE_OAUTH_BASE_URL is configured.';
+
+  const status = Number(err?.code || err?.response?.status || 0);
+  const msg = String(err?.message || 'Unknown Google API error');
+  const lower = msg.toLowerCase();
+
+  if (lower.includes('not authenticated') || lower.includes('run /linkgoogle')) {
+    return `Google account is not linked for this user.\n${relinkHint}`;
+  }
+
+  if (
+    status === 401 ||
+    lower.includes('invalid_grant') ||
+    lower.includes('invalid credentials') ||
+    lower.includes('token has been expired') ||
+    lower.includes('token has expired') ||
+    lower.includes('revoked')
+  ) {
+    return `Google authentication expired or was revoked.\nPlease relink your Google account.\n${relinkHint}`;
+  }
+
+  if (
+    status === 403 ||
+    lower.includes('insufficient') ||
+    lower.includes('permission') ||
+    lower.includes('scope')
+  ) {
+    return `Google denied this request due to missing permissions/scopes.\nPlease relink and accept all requested permissions.\n${relinkHint}`;
+  }
+
+  return `[Google Error] ${msg}`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tool schema definitions
@@ -184,6 +254,14 @@ const DEF = {
   },
 
   // ── Google Integrations ────────────────────────────────────────────────────
+  google_auth_status: {
+    type: 'function',
+    function: {
+      name: 'google_auth_status',
+      description: 'Check whether the user has a linked Google account, token freshness, and the exact relink URL. Use this before saying you cannot access Google services.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
   google_drive_list: {
     type: 'function',
     function: {
@@ -612,7 +690,9 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
     'set_reminder', 'list_reminders', 'delete_reminder',
     'save_note', 'get_notes', 'delete_note',
     'storage_set', 'storage_get', 'storage_delete', 'storage_list',
-    // Google integrations — only when user has linked their Google account
+    // Google auth status — always available (even before linking)
+    'google_auth_status',
+    // Google data tools — only when user has linked their Google account
     ...(hasGoogleAuth ? [
       'google_drive_list', 'google_calendar_list', 'gmail_read_unread',
       'google_tasks_list',
@@ -741,6 +821,14 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
       case 'storage_list': return await storeList(db, userId);
 
       // ── Google Integrations ───────────────────────────────────────────────
+      case 'google_auth_status': {
+        const tokens = await getGoogleTokens(db, userId);
+        const relinkUrl = buildGoogleRelinkUrl(userId);
+        const relinkHint = relinkUrl
+          ? `Relink URL: ${relinkUrl}`
+          : 'Relink URL unavailable because GOOGLE_OAUTH_BASE_URL is not configured.';
+        return `Google auth status: ${formatGoogleAuthStatus(tokens)}.\n${relinkHint}`;
+      }
       case 'google_drive_list':
         try {
           const files = await listDriveFiles(db, userId, 10, args.query || '');
@@ -749,13 +837,13 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             const modified = f.modifiedTime ? ` (modified: ${f.modifiedTime.slice(0, 10)})` : '';
             return `- ${f.name}${modified} [${f.mimeType || 'unknown'}] (ID: ${f.id})`;
           }).join('\n');
-        } catch (e) { return `[Google Error] ${e.message}`; }
+        } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_calendar_list':
         try {
           const events = await listEvents(db, userId, 10, args.days || 7);
           if (!events || !events.length) return 'No upcoming events found.';
           return events.map(e => `- ${e.summary} at ${e.start.dateTime || e.start.date}`).join('\n');
-        } catch (e) { return `[Google Error] ${e.message}`; }
+        } catch (e) { return normalizeGoogleError(e, userId); }
       case 'gmail_read_unread':
         try {
           const emails = await listUnreadEmails(db, userId, args.maxResults || 10, args.query || '');
@@ -767,13 +855,13 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             const date = h.find(x => x.name === 'Date')?.value || '';
             return `- [${date.slice(0, 16)}] ${subject} — from ${from}`;
           }).join('\n');
-        } catch (e) { return `[Google Error] ${e.message}`; }
+        } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_tasks_list':
         try {
           const tasks = await listTasks(db, userId);
           if (!tasks.length) return 'No tasks found.';
           return tasks.map(t => `- ${t.title}`).join('\n');
-        } catch (e) { return `[Google Error] ${e.message}`; }
+        } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_classroom_get_assignments':
         try {
           const assignments = await listUpcomingAssignments(db, userId);
@@ -782,13 +870,13 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             const due = a.dueDate ? `due ${a.dueDate}` : 'no due date';
             return `- [${a.courseName}] ${a.title} (${due})`;
           }).join('\n');
-        } catch (e) { return `[Google Error] ${e.message}`; }
+        } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_classroom_list_courses':
         try {
           const courses = await listCourses(db, userId);
           if (!courses.length) return 'No courses found in Classroom.';
           return courses.map(c => `- ${c.name} (ID: ${c.id})`).join('\n');
-        } catch (e) { return `[Google Error] ${e.message}`; }
+        } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_classroom_list_coursework':
         try {
           const work = await listCoursework(db, userId, args.courseId);
@@ -797,7 +885,7 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             const due = w.dueDate ? `${w.dueDate.year}-${String(w.dueDate.month).padStart(2,'0')}-${String(w.dueDate.day).padStart(2,'0')}` : 'no date';
             return `- ${w.title} (due: ${due}) (ID: ${w.id})`;
           }).join('\n');
-        } catch (e) { return `[Google Error] ${e.message}`; }
+        } catch (e) { return normalizeGoogleError(e, userId); }
 
 
       // ── Shell ─────────────────────────────────────────────────────────────

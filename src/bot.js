@@ -206,11 +206,11 @@ function createBot(db, { webhookRef = null } = {}) {
   // ── /linkgoogle — link user Google account ──────────────────────────────────
   bot.command('linkgoogle', (ctx) => {
     const userId = ctx.from.id;
-    const baseUrl = process.env.WEBHOOK_BASE_URL;
-    if (!baseUrl) {
-      return ctx.reply('WEBHOOK_BASE_URL is not configured. Ask the administrator to set it up.');
+    const oauthBase = (process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+    if (!oauthBase) {
+      return ctx.reply('GOOGLE_OAUTH_BASE_URL is not configured. Ask the administrator to set it up.');
     }
-    const authUrl = `${baseUrl}/api/auth/google?state=${userId}`;
+    const authUrl = `${oauthBase}/api/auth/google?state=${encodeURIComponent(String(userId))}`;
     return ctx.reply('🔗 Click the button below to securely link your Google account to Rin.', {
       reply_markup: {
         inline_keyboard: [[

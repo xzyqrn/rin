@@ -3,10 +3,17 @@
 const { google } = require('googleapis');
 const { getGoogleTokens, saveGoogleTokens } = require('../database');
 
+function _resolveRedirectUri() {
+    if (process.env.GOOGLE_REDIRECT_URI) return process.env.GOOGLE_REDIRECT_URI;
+    const oauthBase = (process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+    if (oauthBase) return `${oauthBase}/api/auth/google/callback`;
+    return undefined;
+}
+
 function getOAuth2Client() {
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${process.env.WEBHOOK_BASE_URL}/auth/google/callback`;
+    const redirectUri = _resolveRedirectUri();
 
     if (!clientId || !clientSecret) {
         throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not set in .env');
@@ -15,42 +22,9 @@ function getOAuth2Client() {
     return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 
-function getAuthUrl(state) {
-    const oauth2Client = getOAuth2Client();
-    const scopes = [
-        'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/calendar',
-        'https://www.googleapis.com/auth/gmail.modify',
-        'https://www.googleapis.com/auth/classroom.courses.readonly',
-        'https://www.googleapis.com/auth/classroom.coursework.me',
-        'https://www.googleapis.com/auth/tasks',
-    ];
-
-    return oauth2Client.generateAuthUrl({
-        access_type: 'offline',
-        scope: scopes,
-        prompt: 'consent',
-        state: state // We can pass the userId here
-    });
-}
-
-async function handleCallback(db, code, userId) {
-    const oauth2Client = getOAuth2Client();
-    const { tokens } = await oauth2Client.getToken(code);
-    
-    const saved = await saveGoogleTokens(db, userId, tokens);
-    
-    if (!saved) {
-        console.error(`[google] Failed to save tokens for user ${userId} to database`);
-        throw new Error('Failed to save Google tokens to database');
-    }
-    return tokens;
-}
-
 async function getAuthenticatedClient(db, userId) {
     const tokens = await getGoogleTokens(db, userId);
-    if (!tokens || !tokens.access_token) {
+    if (!tokens || (!tokens.access_token && !tokens.refresh_token)) {
         throw new Error('User not authenticated with Google. Run /linkgoogle first.');
     }
 
@@ -208,8 +182,6 @@ async function listUpcomingAssignments(db, userId) {
 }
 
 module.exports = {
-    getAuthUrl,
-    handleCallback,
     getAuthenticatedClient,
     listDriveFiles,
     listEvents,
