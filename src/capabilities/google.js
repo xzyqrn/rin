@@ -25,7 +25,6 @@ function getAuthUrl(state) {
         'https://www.googleapis.com/auth/classroom.courses.readonly',
         'https://www.googleapis.com/auth/classroom.coursework.me',
         'https://www.googleapis.com/auth/tasks',
-        'https://www.googleapis.com/auth/keep'
     ];
 
     return oauth2Client.generateAuthUrl({
@@ -67,23 +66,28 @@ async function getAuthenticatedClient(db, userId) {
 }
 
 // ── Drive ────────────────────────────────────────────────────────────────────
-async function listDriveFiles(db, userId, maxResults = 10) {
+async function listDriveFiles(db, userId, maxResults = 10, query = '') {
     const auth = await getAuthenticatedClient(db, userId);
     const drive = google.drive({ version: 'v3', auth });
-    const res = await drive.files.list({
+    const params = {
         pageSize: maxResults,
-        fields: 'nextPageToken, files(id, name)',
-    });
+        fields: 'nextPageToken, files(id, name, mimeType, modifiedTime)',
+    };
+    if (query) params.q = `name contains '${query.replace(/'/g, "\\'")}'`;
+    const res = await drive.files.list(params);
     return res.data.files;
 }
 
 // ── Calendar ──────────────────────────────────────────────────────────────────
-async function listEvents(db, userId, maxResults = 10) {
+async function listEvents(db, userId, maxResults = 10, days = 7) {
     const auth = await getAuthenticatedClient(db, userId);
     const calendar = google.calendar({ version: 'v3', auth });
+    const now = new Date();
+    const timeMax = new Date(now.getTime() + Math.min(days, 90) * 24 * 60 * 60 * 1000).toISOString();
     const res = await calendar.events.list({
         calendarId: 'primary',
-        timeMin: new Date().toISOString(),
+        timeMin: now.toISOString(),
+        timeMax,
         maxResults: maxResults,
         singleEvents: true,
         orderBy: 'startTime',
@@ -92,20 +96,27 @@ async function listEvents(db, userId, maxResults = 10) {
 }
 
 // ── Gmail ────────────────────────────────────────────────────────────────────
-async function listUnreadEmails(db, userId, maxResults = 10) {
+async function listUnreadEmails(db, userId, maxResults = 10, query = '') {
     const auth = await getAuthenticatedClient(db, userId);
     const gmail = google.gmail({ version: 'v1', auth });
+    const q = ['is:unread', query].filter(Boolean).join(' ');
     const res = await gmail.users.messages.list({
         userId: 'me',
-        q: 'is:unread',
+        q,
         maxResults: maxResults
     });
     const messages = res.data.messages || [];
-    const emails = [];
-    for (const msg of messages) {
-        const detail = await gmail.users.messages.get({ userId: 'me', id: msg.id, format: 'metadata', metadataHeaders: ['From', 'Subject'] });
-        emails.push(detail.data);
-    }
+    // Fetch all message metadata in parallel instead of sequentially
+    const emails = await Promise.all(
+        messages.map(msg =>
+            gmail.users.messages.get({
+                userId: 'me',
+                id: msg.id,
+                format: 'metadata',
+                metadataHeaders: ['From', 'Subject', 'Date'],
+            }).then(r => r.data)
+        )
+    );
     return emails;
 }
 
@@ -139,14 +150,61 @@ async function listCoursework(db, userId, courseId) {
     return res.data.courseWork || [];
 }
 
-// ── Keep ─────────────────────────────────────────────────────────────────────
-// NOTE: Google Keep API is typically only available for Enterprise users.
-// We'll define a placeholder that tries to call the API but will likely fail for consumer users.
-async function listKeepNotes(db, userId) {
+// ── Classroom (combined) ───────────────────────────────────────────────────────
+// Fetches all courses + their upcoming published assignments in a single call.
+async function listUpcomingAssignments(db, userId) {
     const auth = await getAuthenticatedClient(db, userId);
-    const keep = google.keep({ version: 'v1', auth });
-    const res = await keep.notes.list();
-    return res.data.notes || [];
+    const classroom = google.classroom({ version: 'v1', auth });
+
+    const coursesRes = await classroom.courses.list({ pageSize: 20 });
+    const courses = coursesRes.data.courses || [];
+    if (!courses.length) return [];
+
+    const now = new Date();
+
+    // Fetch coursework for all courses in parallel
+    const courseworkResults = await Promise.all(
+        courses.map(course =>
+            classroom.courses.courseWork.list({
+                courseId: course.id,
+                courseWorkStates: ['PUBLISHED'],
+                pageSize: 20,
+            }).then(res => ({ course, work: res.data.courseWork || [] }))
+              .catch(() => ({ course, work: [] })) // Skip courses with access errors
+        )
+    );
+
+    const assignments = [];
+    for (const { course, work } of courseworkResults) {
+        for (const item of work) {
+            // Build due date if present
+            let dueDate = null;
+            if (item.dueDate) {
+                const { year, month, day } = item.dueDate;
+                dueDate = new Date(year, month - 1, day);
+            }
+            // Only include upcoming or undated assignments
+            if (!dueDate || dueDate >= now) {
+                assignments.push({
+                    courseName: course.name,
+                    courseId: course.id,
+                    title: item.title,
+                    id: item.id,
+                    dueDate: item.dueDate ? `${item.dueDate.year}-${String(item.dueDate.month).padStart(2,'0')}-${String(item.dueDate.day).padStart(2,'0')}` : null,
+                });
+            }
+        }
+    }
+
+    // Sort by due date ascending (undated last)
+    assignments.sort((a, b) => {
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        return a.dueDate.localeCompare(b.dueDate);
+    });
+
+    return assignments;
 }
 
 module.exports = {
@@ -159,5 +217,5 @@ module.exports = {
     listTasks,
     listCourses,
     listCoursework,
-    listKeepNotes
+    listUpcomingAssignments,
 };

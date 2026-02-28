@@ -24,9 +24,9 @@ const {
   listEvents,
   listUnreadEmails,
   listTasks,
-  listKeepNotes,
   listCourses,
-  listCoursework
+  listCoursework,
+  listUpcomingAssignments,
 } = require('./capabilities/google');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -188,24 +188,40 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_drive_list',
-      description: 'List recent files in the user\'s connected Google Drive. Use when the user asks about their files, documents, or wants to find something they saved.',
-      parameters: { type: 'object', properties: {} },
+      description: 'List recent files in the user\'s connected Google Drive. Use when the user asks about their files, documents, or wants to find something they saved. Pass a query to filter by filename.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Optional filename search term to filter results (e.g. "resume", "budget 2024")' },
+        },
+      },
     },
   },
   google_calendar_list: {
     type: 'function',
     function: {
       name: 'google_calendar_list',
-      description: 'List upcoming events from the user\'s Google Calendar. Use when the user asks about their schedule, meetings, appointments, or what\'s coming up.',
-      parameters: { type: 'object', properties: {} },
+      description: 'List upcoming events from the user\'s Google Calendar. Use when the user asks about their schedule, meetings, appointments, or what\'s coming up. Adjust days to match the timeframe they mention.',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'number', description: 'How many days ahead to look (default: 7, max: 90). Use 1 for today, 7 for this week, 30 for this month.' },
+        },
+      },
     },
   },
   gmail_read_unread: {
     type: 'function',
     function: {
       name: 'gmail_read_unread',
-      description: 'List unread emails in the user\'s Gmail inbox. Use when the user asks about new emails, their inbox, or messages they\'ve received.',
-      parameters: { type: 'object', properties: {} },
+      description: 'List unread emails in the user\'s Gmail inbox. Use when the user asks about new emails, their inbox, or messages they\'ve received. Use query to filter by sender, subject, or keyword.',
+      parameters: {
+        type: 'object',
+        properties: {
+          maxResults: { type: 'number', description: 'Max emails to return (default: 10)' },
+          query: { type: 'string', description: 'Gmail search filter (e.g. "from:boss@work.com", "subject:invoice"). Combined with is:unread automatically.' },
+        },
+      },
     },
   },
   google_tasks_list: {
@@ -216,11 +232,11 @@ const DEF = {
       parameters: { type: 'object', properties: {} },
     },
   },
-  google_keep_list: {
+  google_classroom_get_assignments: {
     type: 'function',
     function: {
-      name: 'google_keep_list',
-      description: 'List notes from the user\'s Google Keep. Use when the user asks about saved notes or quick memos in Keep.',
+      name: 'google_classroom_get_assignments',
+      description: 'Get all upcoming assignments across ALL of the user\'s Google Classroom courses in one call. Use this whenever the user asks about homework, assignments, deadlines, or what\'s due. Results are sorted by due date.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -228,7 +244,7 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_classroom_list_courses',
-      description: 'List the user\'s Google Classroom courses. Use when the user asks about their classes, courses, or classroom.',
+      description: 'List the user\'s Google Classroom courses with their IDs. Use when the user asks which classes/courses they are enrolled in. To see assignments, prefer google_classroom_get_assignments instead.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -236,11 +252,11 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_classroom_list_coursework',
-      description: 'List coursework/assignments for a specific Google Classroom course ID. Use course ID from list_courses.',
+      description: 'List all coursework for a specific course by its ID. Use when the user asks about assignments in a particular class. First call google_classroom_list_courses to get the course ID.',
       parameters: {
         type: 'object',
         properties: {
-          courseId: { type: 'string', description: 'The unique ID of the course' },
+          courseId: { type: 'string', description: 'The unique ID of the course (get this from google_classroom_list_courses)' },
         },
         required: ['courseId'],
       },
@@ -599,8 +615,9 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
     // Google integrations — only when user has linked their Google account
     ...(hasGoogleAuth ? [
       'google_drive_list', 'google_calendar_list', 'gmail_read_unread',
-      'google_tasks_list', 'google_keep_list',
-      'google_classroom_list_courses', 'google_classroom_list_coursework'
+      'google_tasks_list',
+      'google_classroom_get_assignments',
+      'google_classroom_list_courses', 'google_classroom_list_coursework',
     ] : []),
     // File operations, restricted to user's folder for non-admins
     'read_file', 'write_file', 'list_directory', 'delete_file', 'send_file',
@@ -726,50 +743,61 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
       // ── Google Integrations ───────────────────────────────────────────────
       case 'google_drive_list':
         try {
-          const files = await listDriveFiles(db, userId);
-          if (!files.length) return 'No files found in Drive.';
-          return files.map(f => `- ${f.name} (ID: ${f.id})`).join('\n');
-        } catch (e) { return e.message; }
+          const files = await listDriveFiles(db, userId, 10, args.query || '');
+          if (!files || !files.length) return 'No files found in Drive.';
+          return files.map(f => {
+            const modified = f.modifiedTime ? ` (modified: ${f.modifiedTime.slice(0, 10)})` : '';
+            return `- ${f.name}${modified} [${f.mimeType || 'unknown'}] (ID: ${f.id})`;
+          }).join('\n');
+        } catch (e) { return `[Google Error] ${e.message}`; }
       case 'google_calendar_list':
         try {
-          const events = await listEvents(db, userId);
-          if (!events.length) return 'No upcoming events found.';
+          const events = await listEvents(db, userId, 10, args.days || 7);
+          if (!events || !events.length) return 'No upcoming events found.';
           return events.map(e => `- ${e.summary} at ${e.start.dateTime || e.start.date}`).join('\n');
-        } catch (e) { return e.message; }
+        } catch (e) { return `[Google Error] ${e.message}`; }
       case 'gmail_read_unread':
         try {
-          const emails = await listUnreadEmails(db, userId);
+          const emails = await listUnreadEmails(db, userId, args.maxResults || 10, args.query || '');
           if (!emails.length) return 'No unread emails.';
           return emails.map(m => {
-            const subject = m.payload.headers.find(h => h.name === 'Subject')?.value || 'No Subject';
-            const from = m.payload.headers.find(h => h.name === 'From')?.value || 'Unknown';
-            return `- ${subject} (From: ${from})`;
+            const h = m.payload?.headers || [];
+            const subject = h.find(x => x.name === 'Subject')?.value || 'No Subject';
+            const from = h.find(x => x.name === 'From')?.value || 'Unknown';
+            const date = h.find(x => x.name === 'Date')?.value || '';
+            return `- [${date.slice(0, 16)}] ${subject} — from ${from}`;
           }).join('\n');
-        } catch (e) { return e.message; }
+        } catch (e) { return `[Google Error] ${e.message}`; }
       case 'google_tasks_list':
         try {
           const tasks = await listTasks(db, userId);
           if (!tasks.length) return 'No tasks found.';
           return tasks.map(t => `- ${t.title}`).join('\n');
-        } catch (e) { return e.message; }
-      case 'google_keep_list':
+        } catch (e) { return `[Google Error] ${e.message}`; }
+      case 'google_classroom_get_assignments':
         try {
-          const notes = await listKeepNotes(db, userId);
-          if (!notes.length) return 'No notes found.';
-          return notes.map(n => `- ${n.title}\n${n.body?.text?.text || ''}`).join('\n\n');
-        } catch (e) { return e.message; }
+          const assignments = await listUpcomingAssignments(db, userId);
+          if (!assignments.length) return 'No upcoming assignments found across your courses.';
+          return assignments.map(a => {
+            const due = a.dueDate ? `due ${a.dueDate}` : 'no due date';
+            return `- [${a.courseName}] ${a.title} (${due})`;
+          }).join('\n');
+        } catch (e) { return `[Google Error] ${e.message}`; }
       case 'google_classroom_list_courses':
         try {
           const courses = await listCourses(db, userId);
           if (!courses.length) return 'No courses found in Classroom.';
           return courses.map(c => `- ${c.name} (ID: ${c.id})`).join('\n');
-        } catch (e) { return e.message; }
+        } catch (e) { return `[Google Error] ${e.message}`; }
       case 'google_classroom_list_coursework':
         try {
           const work = await listCoursework(db, userId, args.courseId);
           if (!work.length) return 'No coursework found for this course.';
-          return work.map(w => `- ${w.title} (ID: ${w.id}) - Due: ${w.dueDate ? `${w.dueDate.year}-${w.dueDate.month}-${w.dueDate.day}` : 'No date'}`).join('\n');
-        } catch (e) { return e.message; }
+          return work.map(w => {
+            const due = w.dueDate ? `${w.dueDate.year}-${String(w.dueDate.month).padStart(2,'0')}-${String(w.dueDate.day).padStart(2,'0')}` : 'no date';
+            return `- ${w.title} (due: ${due}) (ID: ${w.id})`;
+          }).join('\n');
+        } catch (e) { return `[Google Error] ${e.message}`; }
 
 
       // ── Shell ─────────────────────────────────────────────────────────────

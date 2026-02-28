@@ -5,17 +5,17 @@ function _buildGoogleSection(hasGoogleAuth) {
     return `
 --- Google Services ---
 The user has connected their Google account. You have access to Google Drive, Calendar, Gmail, Tasks, and Classroom. Use them proactively when relevant:
-- Google Drive: Use when the user mentions files, documents, spreadsheets, presentations, or asks to find something they saved.
-- Google Calendar: Use when the user mentions meetings, events, schedule, appointments, or asks about their day/week.
-- Gmail: Use when the user mentions emails, inbox, messages, or asks to check for new mail.
-- Google Tasks: Use when the user mentions tasks, to-do lists, things to do, or action items.
-- Google Keep: Use when the user asks about saved notes or quick memos.
-- Google Classroom: Use when the user mentions courses, assignments, student work, or classes.
+- Google Drive: Use google_drive_list when the user mentions files, documents, spreadsheets, or asks to find something. Pass a query to filter by filename.
+- Google Calendar: Use google_calendar_list when the user mentions meetings, schedule, appointments, or asks about their day/week. Set days=1 for today, days=7 for this week, days=30 for this month.
+- Gmail: Use gmail_read_unread when the user asks about emails or inbox. Use the query param to filter (e.g. query="from:teacher@school.edu").
+- Google Tasks: Use google_tasks_list when the user mentions to-do items or tasks.
+- Google Classroom (assignments): Use google_classroom_get_assignments whenever the user asks about homework, assignments, deadlines, or what's due. This fetches ALL courses and upcoming assignments in one call — always prefer this over the individual tools.
+- Google Classroom (courses): Use google_classroom_list_courses to see which courses the user is enrolled in. Use google_classroom_list_coursework with a courseId to see all work for a specific class.
 ----------------------`;
   }
   return `
 --- Google Services ---
-The user has NOT linked their Google account yet. If they ask about Google Drive, Calendar, Gmail, Tasks, or Keep, let them know they can connect their account using /linkgoogle. Do not attempt to use any Google tools.
+The user has NOT linked their Google account yet. If they ask about Google Drive, Calendar, Gmail, Tasks, or Classroom, let them know they can connect their account using /linkgoogle. Do not attempt to use any Google tools.
 ----------------------`;
 }
 
