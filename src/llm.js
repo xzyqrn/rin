@@ -49,6 +49,22 @@ async function chat(messages, { signal } = {}) {
 }
 
 /**
+ * Some models (or misconfigured tool-calling setups) will emit internal
+ * "tool_code" blocks like:
+ *   tool_code
+ *   print(default_api.think(...))
+ * These are not meant for end-users. Detect them so we can fall back to a
+ * plain, tool-less chat instead of leaking the raw tool code into Telegram.
+ */
+function _looksLikeToolCodeLeak(text) {
+  if (!text) return false;
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('tool_code')) return true;
+  if (/^print\s*\(\s*default_api\./i.test(trimmed)) return true;
+  return false;
+}
+
+/**
  * Compress a list of old conversation messages into a single summary string.
  * Used when the conversation history grows too large.
  * @param {AbortSignal} [signal] - optional abort signal for /cancel
@@ -124,6 +140,15 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
       if (!msg.tool_calls || msg.tool_calls.length === 0) {
         // If Rin produced a plan but the reply is empty, summarise what was done
         const content = (msg.content || '').trim();
+
+        // Guard against models that emit raw "tool_code" blocks instead of
+        // using structured tool_calls. In that case, fall back to a plain
+        // chat without tools so the user never sees the internal code.
+        if (_looksLikeToolCodeLeak(content)) {
+          console.warn('[llm] Detected raw tool_code block; falling back to plain chat without tools.');
+          return await chat(messages, { signal });
+        }
+
         if (!content && activePlan) {
           return 'Done — all planned steps completed.';
         }

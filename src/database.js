@@ -368,7 +368,11 @@ async function checkAndIncrementRateLimit(db, userId, limitPerHour) {
 // ── Google OAuth Tokens (Firebase) ─────────────────────────────────────────────
 
 async function saveGoogleTokens(db, userId, tokens) {
-  if (!firestoreDB) return;
+  if (!firestoreDB) {
+    console.error(`[firebase] Firestore not initialized - cannot save tokens for user ${userId}`);
+    return false;
+  }
+
   try {
     const updateData = {
       access_token: tokens.access_token || '',
@@ -378,17 +382,40 @@ async function saveGoogleTokens(db, userId, tokens) {
     if (tokens.refresh_token) {
       updateData.refresh_token = tokens.refresh_token;
     }
-    await firestoreDB.collection('google_auth').doc(String(userId)).set(updateData, { merge: true });
+
+    // Save as subcollection under users collection: users/{userId}/google_auth/{docId}
+    await getUserRef(userId).collection('google_auth').doc('tokens').set(updateData, { merge: true });
+    return true;
   } catch (error) {
     console.error(`[firebase] Error saving tokens for user ${userId}:`, error);
+    return false;
   }
 }
 
 async function getGoogleTokens(db, userId) {
-  if (!firestoreDB) return null;
+  if (!firestoreDB) {
+    console.error(`[firebase] Firestore not initialized - cannot get tokens for user ${userId}`);
+    return null;
+  }
+
   try {
-    const doc = await firestoreDB.collection('google_auth').doc(String(userId)).get();
-    return doc.exists ? doc.data() : null;
+    // Read from users/{userId}/google_auth/tokens subcollection
+    const docRef = getUserRef(userId).collection('google_auth').doc('tokens');
+    const doc = await docRef.get();
+
+    if (doc.exists) {
+      const tokenData = doc.data();
+
+      if (tokenData.google_access_token) {
+        return {
+          access_token: tokenData.google_access_token,
+          refresh_token: tokenData.google_refresh_token,
+          expiry_date: tokenData.google_expiry_date
+        };
+      }
+      return null;
+    }
+    return null;
   } catch (error) {
     console.error(`[firebase] Error getting tokens for user ${userId}:`, error);
     return null;

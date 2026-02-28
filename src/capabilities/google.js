@@ -39,7 +39,13 @@ function getAuthUrl(state) {
 async function handleCallback(db, code, userId) {
     const oauth2Client = getOAuth2Client();
     const { tokens } = await oauth2Client.getToken(code);
-    await saveGoogleTokens(db, userId, tokens);
+    
+    const saved = await saveGoogleTokens(db, userId, tokens);
+    
+    if (!saved) {
+        console.error(`[google] Failed to save tokens for user ${userId} to database`);
+        throw new Error('Failed to save Google tokens to database');
+    }
     return tokens;
 }
 
@@ -113,6 +119,26 @@ async function listTasks(db, userId) {
     return res.data.items || [];
 }
 
+// ── Classroom ───────────────────────────────────────────────────────────────────
+async function listCourses(db, userId) {
+    const auth = await getAuthenticatedClient(db, userId);
+    const classroom = google.classroom({ version: 'v1', auth });
+    const res = await classroom.courses.list({
+        pageSize: 10
+    });
+    return res.data.courses || [];
+}
+
+async function listCoursework(db, userId, courseId) {
+    const auth = await getAuthenticatedClient(db, userId);
+    const classroom = google.classroom({ version: 'v1', auth });
+    const res = await classroom.courses.courseWork.list({
+        courseId: courseId,
+        pageSize: 10
+    });
+    return res.data.courseWork || [];
+}
+
 // ── Keep ─────────────────────────────────────────────────────────────────────
 // NOTE: Google Keep API is typically only available for Enterprise users.
 // We'll define a placeholder that tries to call the API but will likely fail for consumer users.
@@ -126,9 +152,12 @@ async function listKeepNotes(db, userId) {
 module.exports = {
     getAuthUrl,
     handleCallback,
+    getAuthenticatedClient,
     listDriveFiles,
     listEvents,
     listUnreadEmails,
     listTasks,
+    listCourses,
+    listCoursework,
     listKeepNotes
 };
