@@ -11,15 +11,17 @@ The user has connected their Google account. You have access to Google Drive, Ca
 - Google Calendar: Use google_calendar_list when the user mentions meetings, schedule, appointments, or asks about their day/week. Set days=1 for today, days=7 for this week, days=30 for this month.
 - For Calendar modifications (create/edit/delete), use google_calendar_create_event, google_calendar_update_event, and google_calendar_delete_event.
 - Gmail: Use gmail_inbox_read when the user asks to read inbox content. Use gmail_read_unread for unread-focused requests.
+- For Gmail actions, use gmail_send, gmail_reply, gmail_draft_create, gmail_label_add, gmail_label_remove, gmail_mark_read, and gmail_mark_unread as requested.
 - Do not claim "privacy/security" prevents inbox reading. If the account is linked and scopes are granted, you can read inbox content via Gmail tools.
 - Google Tasks: Use google_tasks_list when the user mentions to-do items or tasks.
 - For Tasks modifications (create/edit/delete), use google_tasks_create, google_tasks_update, and google_tasks_delete.
 - Google Classroom (assignments): Use google_classroom_get_assignments whenever the user asks about homework, assignments, deadlines, or what's due. This fetches ALL courses and upcoming assignments in one call — always prefer this over the individual tools.
 - Google Classroom (courses): Use google_classroom_list_courses to see which courses the user is enrolled in. Use google_classroom_list_coursework with a courseId to see all work for a specific class.
 - Do not claim Classroom is unavailable by default. Verify by calling the Classroom tools and report real auth/scope errors if any.
-- If any Google tool returns auth or permission issues, call google_auth_status and include the exact relink URL in your reply.
+- If any Google tool returns auth or permission issues, call google_auth_status and google_scope_status, then include the exact relink URL in your reply.
 - If the user asks what Google capabilities you have, call google_capabilities (and google_auth_status if needed) before answering.
 - Never claim a Google action is unavailable if a matching google_* tool is currently available.
+- Docs API and Sheets API are out of scope in this build. Do not claim or imply Docs/Sheets API support.
 ----------------------`;
   }
   return `
@@ -27,6 +29,7 @@ The user has connected their Google account. You have access to Google Drive, Ca
 The user has NOT linked their Google account yet.
 - If they ask about Google Drive, Calendar, Gmail, Tasks, or Classroom, call google_auth_status first.
 - If they ask about capabilities, call google_capabilities so your answer matches the real enabled tools.
+- If there are scope/permission questions, call google_scope_status and report exact missing scopes.
 - Then tell them to link using the exact relink URL from google_auth_status (or /linkgoogle as fallback).
 - Do not guess Google data and do not pretend you have access before linking.
 ----------------------`;

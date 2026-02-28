@@ -4,7 +4,8 @@
   "description": "Rin — Telegram AI Bot powered by Trinity (OpenRouter)",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "axios": "^1.13.6",

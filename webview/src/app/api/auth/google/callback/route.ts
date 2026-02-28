@@ -31,13 +31,23 @@ export async function GET(request: Request) {
         const docRef = db.collection('users').doc(String(state)).collection('google_auth').doc('tokens');
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const updateData: any = {
-            access_token: tokens.access_token || '',
-            expiry_date: tokens.expiry_date || 0,
             updated_at: admin.firestore.FieldValue.serverTimestamp()
         };
 
+        if (tokens.access_token) {
+            updateData.access_token = tokens.access_token;
+        }
+        if (typeof tokens.expiry_date === 'number') {
+            updateData.expiry_date = tokens.expiry_date;
+        }
         if (tokens.refresh_token) {
             updateData.refresh_token = tokens.refresh_token;
+        }
+        if (tokens.scope) {
+            updateData.scope = tokens.scope;
+        }
+        if (tokens.token_type) {
+            updateData.token_type = tokens.token_type;
         }
 
         await docRef.set(updateData, { merge: true });

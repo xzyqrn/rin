@@ -3,6 +3,68 @@
 const { google } = require('googleapis');
 const { getGoogleTokens, saveGoogleTokens } = require('../database');
 
+const GOOGLE_SCOPE_REQUIREMENTS = Object.freeze({
+  drive: Object.freeze([
+    'https://www.googleapis.com/auth/drive',
+  ]),
+  calendar: Object.freeze([
+    'https://www.googleapis.com/auth/calendar',
+  ]),
+  gmail_read: Object.freeze([
+    'https://www.googleapis.com/auth/gmail.modify',
+  ]),
+  gmail_send: Object.freeze([
+    'https://www.googleapis.com/auth/gmail.send',
+  ]),
+  gmail_compose: Object.freeze([
+    'https://www.googleapis.com/auth/gmail.compose',
+  ]),
+  tasks: Object.freeze([
+    'https://www.googleapis.com/auth/tasks',
+  ]),
+  classroom_courses: Object.freeze([
+    'https://www.googleapis.com/auth/classroom.courses.readonly',
+  ]),
+  classroom_coursework: Object.freeze([
+    'https://www.googleapis.com/auth/classroom.coursework.me',
+    'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
+  ]),
+});
+
+const GOOGLE_TOOL_SCOPE_REQUIREMENTS = Object.freeze({
+  google_drive_list: GOOGLE_SCOPE_REQUIREMENTS.drive,
+  google_drive_create_file: GOOGLE_SCOPE_REQUIREMENTS.drive,
+  google_drive_create_folder: GOOGLE_SCOPE_REQUIREMENTS.drive,
+  google_drive_update_file: GOOGLE_SCOPE_REQUIREMENTS.drive,
+  google_drive_delete_file: GOOGLE_SCOPE_REQUIREMENTS.drive,
+  google_calendar_list: GOOGLE_SCOPE_REQUIREMENTS.calendar,
+  google_calendar_create_event: GOOGLE_SCOPE_REQUIREMENTS.calendar,
+  google_calendar_update_event: GOOGLE_SCOPE_REQUIREMENTS.calendar,
+  google_calendar_delete_event: GOOGLE_SCOPE_REQUIREMENTS.calendar,
+  gmail_read_unread: GOOGLE_SCOPE_REQUIREMENTS.gmail_read,
+  gmail_inbox_read: GOOGLE_SCOPE_REQUIREMENTS.gmail_read,
+  gmail_send: GOOGLE_SCOPE_REQUIREMENTS.gmail_send,
+  gmail_reply: GOOGLE_SCOPE_REQUIREMENTS.gmail_send,
+  gmail_draft_create: GOOGLE_SCOPE_REQUIREMENTS.gmail_compose,
+  gmail_label_add: GOOGLE_SCOPE_REQUIREMENTS.gmail_read,
+  gmail_label_remove: GOOGLE_SCOPE_REQUIREMENTS.gmail_read,
+  gmail_mark_read: GOOGLE_SCOPE_REQUIREMENTS.gmail_read,
+  gmail_mark_unread: GOOGLE_SCOPE_REQUIREMENTS.gmail_read,
+  google_tasks_list: GOOGLE_SCOPE_REQUIREMENTS.tasks,
+  google_tasks_create: GOOGLE_SCOPE_REQUIREMENTS.tasks,
+  google_tasks_update: GOOGLE_SCOPE_REQUIREMENTS.tasks,
+  google_tasks_delete: GOOGLE_SCOPE_REQUIREMENTS.tasks,
+  google_classroom_get_assignments: [
+    ...GOOGLE_SCOPE_REQUIREMENTS.classroom_courses,
+    ...GOOGLE_SCOPE_REQUIREMENTS.classroom_coursework,
+  ],
+  google_classroom_list_courses: GOOGLE_SCOPE_REQUIREMENTS.classroom_courses,
+  google_classroom_list_coursework: [
+    ...GOOGLE_SCOPE_REQUIREMENTS.classroom_courses,
+    ...GOOGLE_SCOPE_REQUIREMENTS.classroom_coursework,
+  ],
+});
+
 function _resolveRedirectUri() {
   if (process.env.GOOGLE_REDIRECT_URI) return process.env.GOOGLE_REDIRECT_URI;
   const oauthBase = (process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
@@ -20,6 +82,117 @@ function getOAuth2Client() {
   }
 
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+}
+
+function normalizeGoogleScopes(scopeInput) {
+  if (!scopeInput) return [];
+  if (Array.isArray(scopeInput)) {
+    return Array.from(
+      new Set(
+        scopeInput
+          .flatMap((s) => String(s || '').split(/\s+/g))
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    ).sort();
+  }
+  return Array.from(
+    new Set(
+      String(scopeInput)
+        .split(/\s+/g)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  ).sort();
+}
+
+function getGoogleScopeStatusFromTokens(tokens) {
+  const granted = normalizeGoogleScopes(tokens?.scope);
+  const grantedSet = new Set(granted);
+
+  const checks = Object.entries(GOOGLE_TOOL_SCOPE_REQUIREMENTS).reduce((acc, [toolName, requiredScopes]) => {
+    const required = normalizeGoogleScopes(requiredScopes);
+    const missing = required.filter((scope) => !grantedSet.has(scope));
+    acc[toolName] = {
+      required,
+      granted: missing.length === 0,
+      missing,
+    };
+    return acc;
+  }, {});
+
+  return {
+    grantedScopes: granted,
+    checks,
+  };
+}
+
+function _extractGoogleErrorReason(err) {
+  const candidates = [
+    err?.response?.data?.error?.errors?.[0]?.reason,
+    err?.response?.data?.error?.status,
+    err?.errors?.[0]?.reason,
+    err?.errors?.[0]?.message,
+    err?.response?.data?.error_description,
+    err?.response?.data?.error,
+  ];
+  for (const value of candidates) {
+    if (!value) continue;
+    const reason = String(value).trim();
+    if (reason) return reason;
+  }
+  return '';
+}
+
+function categorizeGoogleError(err) {
+  const status = Number(err?.code || err?.response?.status || err?.statusCode || 0);
+  const message = String(err?.message || 'Unknown Google API error');
+  const lower = message.toLowerCase();
+  const reason = _extractGoogleErrorReason(err).toLowerCase();
+
+  if (
+    lower.includes('not authenticated') ||
+    lower.includes('run /linkgoogle') ||
+    lower.includes('no refresh token is set')
+  ) {
+    return { category: 'not_linked', status, message, reason };
+  }
+
+  if (
+    status === 401 ||
+    lower.includes('invalid_grant') ||
+    lower.includes('invalid credentials') ||
+    lower.includes('token has expired') ||
+    lower.includes('token has been expired') ||
+    lower.includes('revoked')
+  ) {
+    return { category: 'auth_expired', status, message, reason };
+  }
+
+  if (
+    status === 403 ||
+    reason.includes('insufficientpermissions') ||
+    reason.includes('forbidden') ||
+    lower.includes('insufficient') ||
+    lower.includes('permission') ||
+    lower.includes('scope')
+  ) {
+    return { category: 'insufficient_scope', status, message, reason };
+  }
+
+  if (status === 404 || reason.includes('notfound')) {
+    return { category: 'not_found', status, message, reason };
+  }
+
+  if (status === 429 || reason.includes('ratelimit') || reason.includes('userratelimitexceeded')) {
+    return { category: 'rate_limited', status, message, reason };
+  }
+
+  if (status >= 500 || reason.includes('backenderror') || reason.includes('internalerror')) {
+    return { category: 'google_service_error', status, message, reason };
+  }
+
+  return { category: 'unknown_google_error', status, message, reason };
 }
 
 async function getAuthenticatedClient(db, userId) {
@@ -82,6 +255,35 @@ function _extractEmailBody(payload) {
 function _getHeader(headers, name) {
   const match = (headers || []).find((h) => String(h.name || '').toLowerCase() === name.toLowerCase());
   return match?.value || '';
+}
+
+function _sanitizeHeaderValue(value) {
+  return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function _encodeBase64UrlUtf8(input) {
+  return Buffer.from(String(input || ''), 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function _buildRawEmail({ to, subject, body, cc, bcc, inReplyTo, references } = {}) {
+  const headers = [
+    `To: ${_sanitizeHeaderValue(to)}`,
+    ...(cc ? [`Cc: ${_sanitizeHeaderValue(cc)}`] : []),
+    ...(bcc ? [`Bcc: ${_sanitizeHeaderValue(bcc)}`] : []),
+    `Subject: ${_sanitizeHeaderValue(subject)}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: 7bit',
+    ...(inReplyTo ? [`In-Reply-To: ${_sanitizeHeaderValue(inReplyTo)}`] : []),
+    ...(references ? [`References: ${_sanitizeHeaderValue(references)}`] : []),
+    '',
+    String(body || ''),
+  ];
+  return _encodeBase64UrlUtf8(headers.join('\r\n'));
 }
 
 function _buildEventDateInput(value, timeZone) {
@@ -295,6 +497,121 @@ async function listInboxEmails(db, userId, maxResults = 10, query = '', includeB
   return _listGmailEmails(db, userId, { maxResults, query, includeBody, unreadOnly });
 }
 
+async function sendEmail(db, userId, { to, subject, body, cc, bcc, threadId } = {}) {
+  const auth = await getAuthenticatedClient(db, userId);
+  const gmail = google.gmail({ version: 'v1', auth });
+  const raw = _buildRawEmail({ to, subject, body, cc, bcc });
+  const res = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: {
+      raw,
+      ...(threadId ? { threadId } : {}),
+    },
+  });
+  return res.data;
+}
+
+async function createDraft(db, userId, { to, subject, body, cc, bcc, threadId } = {}) {
+  const auth = await getAuthenticatedClient(db, userId);
+  const gmail = google.gmail({ version: 'v1', auth });
+  const raw = _buildRawEmail({ to, subject, body, cc, bcc });
+  const res = await gmail.users.drafts.create({
+    userId: 'me',
+    requestBody: {
+      message: {
+        raw,
+        ...(threadId ? { threadId } : {}),
+      },
+    },
+  });
+  return res.data;
+}
+
+async function replyToMessage(db, userId, { messageId, body, to, subject } = {}) {
+  const auth = await getAuthenticatedClient(db, userId);
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  const original = await gmail.users.messages.get({
+    userId: 'me',
+    id: messageId,
+    format: 'metadata',
+    metadataHeaders: ['From', 'Reply-To', 'Subject', 'Message-ID', 'References'],
+  });
+
+  const headers = original.data.payload?.headers || [];
+  const replyTo = to || _getHeader(headers, 'Reply-To') || _getHeader(headers, 'From');
+  const originalSubject = _getHeader(headers, 'Subject') || '';
+  const normalizedSubject = String(subject || originalSubject || 'No Subject');
+  const prefixedSubject = /^re:/i.test(normalizedSubject) ? normalizedSubject : `Re: ${normalizedSubject}`;
+  const messageIdHeader = _getHeader(headers, 'Message-ID');
+  const existingRefs = _getHeader(headers, 'References');
+  const references = [existingRefs, messageIdHeader].filter(Boolean).join(' ').trim();
+
+  const raw = _buildRawEmail({
+    to: replyTo,
+    subject: prefixedSubject,
+    body,
+    inReplyTo: messageIdHeader,
+    references,
+  });
+
+  const res = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: {
+      raw,
+      ...(original.data.threadId ? { threadId: original.data.threadId } : {}),
+    },
+  });
+  return res.data;
+}
+
+async function _resolveLabelIds(gmail, labels) {
+  const unique = Array.from(
+    new Set((labels || []).map((label) => String(label || '').trim()).filter(Boolean))
+  );
+  if (!unique.length) return [];
+
+  const list = await gmail.users.labels.list({ userId: 'me' });
+  const labelMap = new Map();
+  for (const item of list.data.labels || []) {
+    if (!item.id) continue;
+    labelMap.set(String(item.id), String(item.id));
+    if (item.name) labelMap.set(String(item.name).toLowerCase(), String(item.id));
+  }
+
+  return unique.map((label) => {
+    const byName = labelMap.get(label.toLowerCase());
+    if (byName) return byName;
+    return labelMap.get(label) || label;
+  });
+}
+
+async function modifyMessageLabels(db, userId, messageId, { add = [], remove = [] } = {}) {
+  const auth = await getAuthenticatedClient(db, userId);
+  const gmail = google.gmail({ version: 'v1', auth });
+  const addLabelIds = await _resolveLabelIds(gmail, add);
+  const removeLabelIds = await _resolveLabelIds(gmail, remove);
+
+  const res = await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: { addLabelIds, removeLabelIds },
+  });
+  return {
+    id: res.data.id,
+    threadId: res.data.threadId,
+    labelIds: res.data.labelIds || [],
+  };
+}
+
+async function markMessageRead(db, userId, messageId) {
+  return modifyMessageLabels(db, userId, messageId, { remove: ['UNREAD'] });
+}
+
+async function markMessageUnread(db, userId, messageId) {
+  return modifyMessageLabels(db, userId, messageId, { add: ['UNREAD'] });
+}
+
 // ── Tasks ────────────────────────────────────────────────────────────────────
 async function listTasks(db, userId, maxResults = 20, showCompleted = false) {
   const auth = await getAuthenticatedClient(db, userId);
@@ -434,6 +751,11 @@ async function listUpcomingAssignments(db, userId) {
 
 module.exports = {
   getAuthenticatedClient,
+  normalizeGoogleScopes,
+  categorizeGoogleError,
+  getGoogleScopeStatusFromTokens,
+  GOOGLE_SCOPE_REQUIREMENTS,
+  GOOGLE_TOOL_SCOPE_REQUIREMENTS,
   listDriveFiles,
   createDriveFile,
   createDriveFolder,
@@ -445,6 +767,12 @@ module.exports = {
   deleteCalendarEvent,
   listUnreadEmails,
   listInboxEmails,
+  sendEmail,
+  replyToMessage,
+  createDraft,
+  modifyMessageLabels,
+  markMessageRead,
+  markMessageUnread,
   listTasks,
   createTask,
   updateTask,

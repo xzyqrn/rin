@@ -98,7 +98,8 @@ Rin uses function calling to take real-world actions.
 | | `storage_get` | Retrieve a stored value by key |
 | | `storage_list` | List all your stored key-value pairs |
 | **Google Auth** | `google_auth_status` | Check link status, token freshness, and exact relink URL |
-| | `google_capabilities` | Return currently enabled Google capabilities (read/write) based on active tools |
+| | `google_capabilities` | Return machine-readable capability JSON (runtime source of truth) |
+| | `google_scope_status` | Return machine-readable scope diagnostics and missing-scope relink guidance |
 | **Files*** | `read_file` | Read contents of a file in your personal folder |
 | | `write_file` | Create or overwrite a file in your folder |
 | | `list_directory` | See what files you have uploaded/created |
@@ -109,6 +110,8 @@ Rin uses function calling to take real-world actions.
 | | `google_calendar_create_event / update / delete` | Create, edit, and delete Calendar events |
 | | `gmail_inbox_read` | Read inbox messages including content preview/body |
 | | `gmail_read_unread` | Read unread inbox messages with content |
+| | `gmail_send / gmail_reply / gmail_draft_create` | Send, reply, and create drafts in Gmail |
+| | `gmail_label_add / gmail_label_remove / gmail_mark_read / gmail_mark_unread` | Manage labels and read-state by message ID |
 | | `google_tasks_list` | List items in Google Tasks |
 | | `google_tasks_create / update / delete` | Create, edit, and delete Tasks |
 | | `google_classroom_...` | List Classroom courses and assignments |
@@ -203,7 +206,10 @@ Rin uses **Google Cloud Firestore**.
 | `GOOGLE_OAUTH_BASE_URL` | Yes** | Canonical webview base URL that serves `/api/auth/google/*` |
 | `WEBHOOK_BASE_URL` | Yes | Public URL for webhook endpoints only (`/webhook/:token`) |
 | `LLM_MODEL` | No | Model ID (default: `gemini-2.5-flash-lite`) |
+| `MODEL_ROUTER_ENABLED` | No | Enable quality-first model routing (`1` to enable) |
+| `LLM_MODEL_COMPLEX` | No | Complex-task model when router is enabled |
 | `TIMEZONE` | No | Global system timezone (e.g., `Asia/Manila`) |
+| `GOOGLE_AGENT_V2` | No | Enable expanded Gmail action tools and Google scope diagnostics (`1` default, `0` to disable) |
 
 *\*Google Gemini is the default provider. OpenRouter is supported as a fallback.*
 *\*\*Required for Google linking flow from `/linkgoogle`.*
@@ -225,9 +231,10 @@ Rin uses **Google Cloud Firestore**.
 ### Google Integration
 - **`Google account is not linked for this user.`**: Run `/linkgoogle` or call `google_auth_status` to get the exact relink URL.
 - **`Google authentication expired or was revoked.`**: Relink your Google account and approve permissions again.
-- **`Google denied this request due to missing permissions/scopes.`**: Relink and grant full requested scopes on consent screen.
+- **`Google denied this request due to missing permissions/scopes.`**: Run `google_scope_status`, then relink and grant full requested scopes on consent screen.
 - **`Auth error: access_denied`**: You declined the permissions on the Google consent screen.
 - **After new Google features are deployed**: Relink once via `/linkgoogle` so your token includes the newest scopes.
+- **Scope boundary**: Docs API and Sheets API are intentionally out of scope in this build.
 
 ### Terminal & Shell
 - **`Command blocked by security policy`**: You tried to run a forbidden command (e.g., `rm -rf /`).

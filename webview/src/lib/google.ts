@@ -5,6 +5,9 @@ function resolveOAuthBaseUrl(baseUrlOverride?: string) {
 
     // Canonical OAuth owner base URL in production.
     let baseUrl = process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL;
+    if (!baseUrl && process.env.VERCEL_URL) {
+        baseUrl = `https://${process.env.VERCEL_URL}`;
+    }
     if (!baseUrl) {
         if (process.env.NODE_ENV === 'development') {
             baseUrl = 'http://localhost:3000';
@@ -42,6 +45,8 @@ export function getAuthUrl(state: string, baseUrlOverride?: string) {
         'https://www.googleapis.com/auth/drive',
         'https://www.googleapis.com/auth/calendar',
         'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/gmail.compose',
         'https://www.googleapis.com/auth/classroom.courses.readonly',
         'https://www.googleapis.com/auth/classroom.coursework.me',
         'https://www.googleapis.com/auth/classroom.coursework.students.readonly',

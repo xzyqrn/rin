@@ -392,6 +392,12 @@ async function saveGoogleTokens(db, userId, tokens) {
     if (tokens.refresh_token) {
       updateData.refresh_token = tokens.refresh_token;
     }
+    if (tokens.scope) {
+      updateData.scope = String(tokens.scope);
+    }
+    if (tokens.token_type) {
+      updateData.token_type = String(tokens.token_type);
+    }
 
     // Save as subcollection under users collection: users/{userId}/google_auth/{docId}
     await getUserRef(userId).collection('google_auth').doc('tokens').set(updateData, { merge: true });
@@ -420,7 +426,9 @@ async function getGoogleTokens(db, userId) {
         return {
           access_token: tokenData.access_token,
           refresh_token: tokenData.refresh_token,
-          expiry_date: tokenData.expiry_date
+          expiry_date: tokenData.expiry_date,
+          scope: tokenData.scope,
+          token_type: tokenData.token_type,
         };
       }
       return null;

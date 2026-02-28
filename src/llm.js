@@ -3,6 +3,8 @@
 const OpenAI = require('openai');
 
 const MODEL = process.env.LLM_MODEL || 'gemini-2.5-flash-lite';
+const COMPLEX_MODEL = process.env.LLM_MODEL_COMPLEX || MODEL;
+const MODEL_ROUTER_ENABLED = /^(1|true|yes)$/i.test(String(process.env.MODEL_ROUTER_ENABLED || ''));
 
 const useGeminiNative = !!process.env.GEMINI_API_KEY;
 
@@ -28,6 +30,19 @@ function _trackUsage(completion) {
   } catch { /* non-critical */ }
 }
 
+function _logGuardEvent(eventType, payload = {}) {
+  try {
+    if (!_db || typeof _db.collection !== 'function') return;
+    _db.collection('agent_guard_metrics').add({
+      event_type: eventType,
+      payload,
+      created_at: Math.floor(Date.now() / 1000),
+    }).catch(() => {});
+  } catch {
+    // Best-effort metrics only.
+  }
+}
+
 async function _retryCreate(params, options = {}, maxRetries = 3) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
@@ -42,8 +57,39 @@ async function _retryCreate(params, options = {}, maxRetries = 3) {
   }
 }
 
+function _shouldUseComplexModel(lastUserText = '', toolNames = new Set()) {
+  const text = String(lastUserText || '').toLowerCase();
+  if (!text) return false;
+
+  const multiStepIntent =
+    /\b(then|after that|also|next|for each|step by step|plan)\b/i.test(text) ||
+    /\b(check|read|scan|fetch|find).{1,80}\b(and|then)\b.{1,80}\b(remind|reply|send|label|update|create)\b/i.test(text);
+
+  const highStakesGoogleIntent =
+    /\b(gmail|email|inbox|calendar|drive|tasks?|classroom)\b/i.test(text) &&
+    /\b(urgent|important|all|every|summarize|triage|organize|categorize)\b/i.test(text);
+
+  const capabilityIntent =
+    /\b(google|gmail|drive|calendar|tasks?|classroom)\b/i.test(text) &&
+    /\b(capab|access|permission|scope|what can you do)\b/i.test(text);
+
+  return Boolean(
+    multiStepIntent ||
+    highStakesGoogleIntent ||
+    capabilityIntent ||
+    (toolNames.size > 14 && /\b(do|handle|manage)\b/i.test(text))
+  );
+}
+
+function _selectModel(messages = [], toolDefs = []) {
+  if (!MODEL_ROUTER_ENABLED) return MODEL;
+  const toolNames = _getToolNames(toolDefs);
+  const lastUserText = _getLastUserText(messages);
+  return _shouldUseComplexModel(lastUserText, toolNames) ? COMPLEX_MODEL : MODEL;
+}
+
 async function chat(messages, { signal } = {}) {
-  const completion = await _retryCreate({ model: MODEL, messages }, { signal });
+  const completion = await _retryCreate({ model: _selectModel(messages), messages }, { signal });
   _trackUsage(completion);
   return (completion.choices[0].message.content || '').trim();
 }
@@ -86,7 +132,7 @@ function _shouldForceToolGrounding(lastUserText, toolNames) {
 
   const googleIntent = /\b(google|gmail|email|inbox|calendar|schedule|meeting|drive|classroom|assignment|homework|task|to-?do)\b/i.test(text);
   if (googleIntent) {
-    if (toolNames.has('google_auth_status')) return true;
+    if (toolNames.has('google_auth_status') || toolNames.has('google_scope_status')) return true;
     if (
       toolNames.has('google_calendar_list') ||
       toolNames.has('gmail_read_unread') ||
@@ -153,12 +199,18 @@ function _looksLikeUnsupportedGoogleCapabilityClaim(text, toolNames) {
       /\bsnippet access\b/i.test(content)
     );
 
+  const contradictsGmailActions =
+    (toolNames.has('gmail_send') || toolNames.has('gmail_reply') || toolNames.has('gmail_draft_create') || toolNames.has('gmail_label_add')) &&
+    /\b(gmail|email|inbox)\b/i.test(content) &&
+    /\b(cannot|can't)\b[\s\S]{0,50}\b(send|reply|draft|label|mark read|mark unread|modify)\b/i.test(content);
+
   return Boolean(
     privacyExcuseOrFalseRestriction ||
     contradictsDriveCrud ||
     contradictsCalendarCrud ||
     contradictsTasksCrud ||
-    contradictsGmailInboxRead
+    contradictsGmailInboxRead ||
+    contradictsGmailActions
   );
 }
 
@@ -190,7 +242,7 @@ async function summarizeHistory(messages, signal) {
 
   try {
     const completion = await _retryCreate({
-      model: MODEL,
+      model: _selectModel([{ role: 'user', content: transcript }]),
       messages: [
         {
           role: 'system',
@@ -227,23 +279,29 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
   const toolNames = _getToolNames(toolDefs);
   const initialUserText = _getLastUserText(messages);
   const shouldForceToolGrounding = _shouldForceToolGrounding(initialUserText, toolNames);
+  const isGoogleCapabilityRequest =
+    /\b(google|gmail|drive|calendar|tasks?|classroom)\b/i.test(initialUserText) &&
+    /\b(can you|capab|access|permissions?|what can you do|what can you access)\b/i.test(initialUserText);
   let groundingNudgeUsed = false;
+  let capabilityPreflightAttempts = 0;
 
   // Track the plan if Rin produces one, so we can display progress
   let activePlan = null;
   let externalToolCalls = 0;
   let verificationPassDone = false;
   let capabilityCorrectionUsed = false;
+  let googleCapabilitiesChecked = false;
+  const routedModel = _selectModel(messages, toolDefs);
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       // DEBUG LOGGING
       try {
-        require('fs').writeFileSync('/tmp/llm_payload.json', JSON.stringify({ model: MODEL, messages: current, tools: (toolDefs || []).length }));
+        require('fs').writeFileSync('/tmp/llm_payload.json', JSON.stringify({ model: routedModel, messages: current, tools: (toolDefs || []).length }));
       } catch (e) { }
 
       const completion = await _retryCreate({
-        model: MODEL,
+        model: routedModel,
         messages: current,
         tools: toolDefs,
         tool_choice: 'auto',
@@ -267,25 +325,48 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
 
         if (!groundingNudgeUsed && shouldForceToolGrounding && externalToolCalls === 0) {
           groundingNudgeUsed = true;
+          _logGuardEvent('tool_grounding_nudge', { reason: 'forced_tool_grounding' });
           current.push(msg);
           current.push({
             role: 'user',
             content:
               'Do not guess for this request. Use relevant tools now. ' +
               'If this is a Google capability/access request, call google_capabilities first. ' +
-              'If access is unavailable, call google_auth_status and include the exact relink URL.',
+              'If access is unavailable, call google_auth_status and google_scope_status, then include the exact relink URL.',
+          });
+          continue;
+        }
+
+        if (
+          isGoogleCapabilityRequest &&
+          toolNames.has('google_capabilities') &&
+          !googleCapabilitiesChecked &&
+          capabilityPreflightAttempts < 2
+        ) {
+          capabilityPreflightAttempts++;
+          _logGuardEvent('capability_preflight_nudge', {
+            reason: 'missing_google_capabilities_call',
+            attempt: capabilityPreflightAttempts,
+          });
+          current.push(msg);
+          current.push({
+            role: 'user',
+            content:
+              'Before finalizing capability answers, call google_capabilities first. ' +
+              'If there is any auth/scope issue, also call google_auth_status and google_scope_status.',
           });
           continue;
         }
 
         if (!capabilityCorrectionUsed && _looksLikeUnsupportedGoogleCapabilityClaim(content, toolNames)) {
           capabilityCorrectionUsed = true;
+          _logGuardEvent('capability_correction_trigger', { reason: 'unsupported_google_capability_claim' });
           current.push(msg);
           current.push({
             role: 'user',
             content:
               'Your previous message made an unsupported Google capability claim. ' +
-              'Call google_capabilities and google_auth_status, then verify with relevant Google tools before answering. ' +
+              'Call google_capabilities, google_auth_status, and google_scope_status, then verify with relevant Google tools before answering. ' +
               'Do not cite generic privacy/security limitations. ' +
               'Do not say "view-only" for a service if create/update/delete tools for that service are available. ' +
               'If access fails, report the real auth/scope error and provide the exact relink URL.',
@@ -300,6 +381,7 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
         const needsVerification = !verificationPassDone && (externalToolCalls > 1 || (activePlan && activePlan.length > 1));
         if (needsVerification) {
           verificationPassDone = true;
+          _logGuardEvent('verification_pass', { external_tool_calls: externalToolCalls });
           const verified = await _runVerificationPass([...current, msg], signal);
           if (verified) return verified;
         }
@@ -338,6 +420,7 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
             console.log(`[Rin] 🛠️  Executing: ${toolName}(${JSON.stringify(args)})`);
             result = String(await executor(toolName, args));
             externalToolCalls++;
+            if (toolName === 'google_capabilities') googleCapabilitiesChecked = true;
             console.log(`[Rin] ✅ Finished: ${toolName}`);
           }
         } catch (err) {

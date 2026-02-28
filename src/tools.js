@@ -20,6 +20,9 @@ const {
   storageGet, getGoogleTokens
 } = require('./database');
 const {
+  GOOGLE_SCOPE_REQUIREMENTS,
+  categorizeGoogleError,
+  getGoogleScopeStatusFromTokens,
   listDriveFiles,
   createDriveFile,
   createDriveFolder,
@@ -31,6 +34,12 @@ const {
   deleteCalendarEvent,
   listUnreadEmails,
   listInboxEmails,
+  sendEmail,
+  replyToMessage,
+  createDraft,
+  modifyMessageLabels,
+  markMessageRead,
+  markMessageUnread,
   listTasks,
   createTask,
   updateTask,
@@ -39,6 +48,8 @@ const {
   listCoursework,
   listUpcomingAssignments,
 } = require('./capabilities/google');
+
+const GOOGLE_AGENT_V2_ENABLED = process.env.GOOGLE_AGENT_V2 !== '0';
 
 function getGoogleOAuthBaseUrl() {
   return (process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
@@ -74,40 +85,156 @@ function formatGoogleAuthStatus(tokens) {
 }
 
 function normalizeGoogleError(err, userId) {
+  const details = categorizeGoogleError(err);
   const relinkUrl = buildGoogleRelinkUrl(userId);
   const relinkHint = relinkUrl
     ? `Relink: ${relinkUrl}`
     : 'Relink: use /linkgoogle after GOOGLE_OAUTH_BASE_URL is configured.';
 
-  const status = Number(err?.code || err?.response?.status || 0);
-  const msg = String(err?.message || 'Unknown Google API error');
-  const lower = msg.toLowerCase();
-
-  if (lower.includes('not authenticated') || lower.includes('run /linkgoogle')) {
+  if (details.category === 'not_linked') {
     return `Google account is not linked for this user.\n${relinkHint}`;
   }
 
-  if (
-    status === 401 ||
-    lower.includes('invalid_grant') ||
-    lower.includes('invalid credentials') ||
-    lower.includes('token has been expired') ||
-    lower.includes('token has expired') ||
-    lower.includes('revoked')
-  ) {
+  if (details.category === 'auth_expired') {
     return `Google authentication expired or was revoked.\nPlease relink your Google account.\n${relinkHint}`;
   }
 
-  if (
-    status === 403 ||
-    lower.includes('insufficient') ||
-    lower.includes('permission') ||
-    lower.includes('scope')
-  ) {
-    return `Google denied this request due to missing permissions/scopes.\nPlease relink and accept all requested permissions.\n${relinkHint}`;
+  if (details.category === 'insufficient_scope') {
+    return `Google denied this request due to missing permissions/scopes.\nRun google_scope_status for exact missing scopes, then relink and accept all requested permissions.\n${relinkHint}`;
   }
 
-  return `[Google Error] ${msg}`;
+  if (details.category === 'not_found') {
+    return `Google could not find the requested resource (status ${details.status || 'unknown'}).\nVerify the ID and try again.`;
+  }
+
+  if (details.category === 'rate_limited') {
+    return 'Google API rate limit reached. Please retry shortly.';
+  }
+
+  return `[Google Error] ${details.message}`;
+}
+
+async function logGoogleToolMetric(db, userId, service, action, status, errorCategory = '') {
+  try {
+    if (!db || typeof db.collection !== 'function') return;
+    await db.collection('google_tool_metrics').add({
+      user_id: userId,
+      service,
+      action,
+      status,
+      error_category: errorCategory || null,
+      created_at: Math.floor(Date.now() / 1000),
+    });
+  } catch {
+    // Best-effort metrics only.
+  }
+}
+
+function _minutesUntilExpiry(expiryDate) {
+  const expiry = Number(expiryDate || 0);
+  if (!expiry) return null;
+  return Math.floor((expiry - Date.now()) / 60000);
+}
+
+function buildGoogleCapabilitiesPayload({ hasGoogleAuth, keys, userId }) {
+  const has = (name) => keys.includes(name);
+  return {
+    schema_version: 'google_capabilities.v1',
+    source_of_truth: 'runtime_tool_registry',
+    linked: Boolean(hasGoogleAuth),
+    relink_url: buildGoogleRelinkUrl(userId) || null,
+    services: {
+      drive: {
+        list: has('google_drive_list'),
+        create_file: has('google_drive_create_file'),
+        create_folder: has('google_drive_create_folder'),
+        update: has('google_drive_update_file'),
+        delete: has('google_drive_delete_file'),
+      },
+      gmail: {
+        read_unread: has('gmail_read_unread'),
+        inbox_read: has('gmail_inbox_read'),
+        send: has('gmail_send'),
+        reply: has('gmail_reply'),
+        draft_create: has('gmail_draft_create'),
+        label_add: has('gmail_label_add'),
+        label_remove: has('gmail_label_remove'),
+        mark_read: has('gmail_mark_read'),
+        mark_unread: has('gmail_mark_unread'),
+      },
+      calendar: {
+        list: has('google_calendar_list'),
+        create: has('google_calendar_create_event'),
+        update: has('google_calendar_update_event'),
+        delete: has('google_calendar_delete_event'),
+      },
+      tasks: {
+        list: has('google_tasks_list'),
+        create: has('google_tasks_create'),
+        update: has('google_tasks_update'),
+        delete: has('google_tasks_delete'),
+      },
+      classroom: {
+        list_assignments: has('google_classroom_get_assignments'),
+        list_courses: has('google_classroom_list_courses'),
+        list_coursework: has('google_classroom_list_coursework'),
+        write_actions: false,
+      },
+    },
+    out_of_scope: ['docs_api', 'sheets_api'],
+  };
+}
+
+function buildGoogleScopeStatusPayload({ tokens, userId }) {
+  const linked = Boolean(tokens && (tokens.access_token || tokens.refresh_token));
+  const relinkUrl = buildGoogleRelinkUrl(userId) || null;
+  const expiresInMinutes = _minutesUntilExpiry(tokens?.expiry_date);
+  const scopeStatus = getGoogleScopeStatusFromTokens(tokens || {});
+  const grantedSet = new Set(scopeStatus.grantedScopes || []);
+  const requiredScopesByService = {
+    drive: GOOGLE_SCOPE_REQUIREMENTS.drive,
+    calendar: GOOGLE_SCOPE_REQUIREMENTS.calendar,
+    gmail: Array.from(
+      new Set([
+        ...GOOGLE_SCOPE_REQUIREMENTS.gmail_read,
+        ...GOOGLE_SCOPE_REQUIREMENTS.gmail_send,
+        ...GOOGLE_SCOPE_REQUIREMENTS.gmail_compose,
+      ])
+    ),
+    tasks: GOOGLE_SCOPE_REQUIREMENTS.tasks,
+    classroom: Array.from(
+      new Set([
+        ...GOOGLE_SCOPE_REQUIREMENTS.classroom_courses,
+        ...GOOGLE_SCOPE_REQUIREMENTS.classroom_coursework,
+      ])
+    ),
+  };
+  const missingScopesByService = Object.fromEntries(
+    Object.entries(requiredScopesByService).map(([service, scopes]) => [
+      service,
+      scopes.filter((scope) => !grantedSet.has(scope)),
+    ])
+  );
+
+  return {
+    schema_version: 'google_scope_status.v1',
+    linked,
+    relink_url: relinkUrl,
+    token: {
+      has_access_token: Boolean(tokens?.access_token),
+      has_refresh_token: Boolean(tokens?.refresh_token),
+      expiry_date: Number(tokens?.expiry_date || 0) || null,
+      expires_in_minutes: expiresInMinutes,
+      expired: expiresInMinutes !== null ? expiresInMinutes <= 0 : null,
+    },
+    granted_scopes: scopeStatus.grantedScopes,
+    required_scopes_by_service: requiredScopesByService,
+    missing_scopes_by_service: missingScopesByService,
+    tool_scope_checks: scopeStatus.checks,
+    relink_instructions: relinkUrl
+      ? `Relink at ${relinkUrl} and approve all requested scopes.`
+      : 'Relink URL unavailable. Configure GOOGLE_OAUTH_BASE_URL and retry.',
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -269,7 +396,7 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_capabilities',
-      description: 'Return the currently available Google capabilities based on linked auth and enabled tools. Use when the user asks what Google actions you can do.',
+      description: 'Return machine-readable JSON with currently available Google capabilities based on linked auth and enabled tools. Use when the user asks what Google actions you can do.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -278,6 +405,14 @@ const DEF = {
     function: {
       name: 'google_auth_status',
       description: 'Check whether the user has a linked Google account, token freshness, and the exact relink URL. Use this before saying you cannot access Google services.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  google_scope_status: {
+    type: 'function',
+    function: {
+      name: 'google_scope_status',
+      description: 'Return machine-readable Google scope diagnostics, including granted scopes, missing scopes by service, and relink guidance.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -450,6 +585,127 @@ const DEF = {
           unreadOnly: { type: 'boolean', description: 'Set true to only return unread emails' },
           includeBody: { type: 'boolean', description: 'Set false to return headers/snippet only' },
         },
+      },
+    },
+  },
+  gmail_send: {
+    type: 'function',
+    function: {
+      name: 'gmail_send',
+      description: 'Send an email from the connected Gmail account.',
+      parameters: {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: 'Recipient email address(es), comma-separated if multiple' },
+          subject: { type: 'string', description: 'Email subject line' },
+          body: { type: 'string', description: 'Plain-text email body' },
+          cc: { type: 'string', description: 'Optional CC recipient(s), comma-separated' },
+          bcc: { type: 'string', description: 'Optional BCC recipient(s), comma-separated' },
+          threadId: { type: 'string', description: 'Optional Gmail thread ID to append the message to an existing thread' },
+        },
+        required: ['to', 'subject', 'body'],
+      },
+    },
+  },
+  gmail_reply: {
+    type: 'function',
+    function: {
+      name: 'gmail_reply',
+      description: 'Reply to a Gmail message by message ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          messageId: { type: 'string', description: 'Gmail message ID to reply to' },
+          body: { type: 'string', description: 'Reply body (plain text)' },
+          to: { type: 'string', description: 'Optional explicit recipient override' },
+          subject: { type: 'string', description: 'Optional explicit subject override' },
+        },
+        required: ['messageId', 'body'],
+      },
+    },
+  },
+  gmail_draft_create: {
+    type: 'function',
+    function: {
+      name: 'gmail_draft_create',
+      description: 'Create a Gmail draft message.',
+      parameters: {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: 'Recipient email address(es), comma-separated if multiple' },
+          subject: { type: 'string', description: 'Draft subject line' },
+          body: { type: 'string', description: 'Draft body (plain text)' },
+          cc: { type: 'string', description: 'Optional CC recipient(s)' },
+          bcc: { type: 'string', description: 'Optional BCC recipient(s)' },
+          threadId: { type: 'string', description: 'Optional Gmail thread ID' },
+        },
+        required: ['to', 'subject', 'body'],
+      },
+    },
+  },
+  gmail_label_add: {
+    type: 'function',
+    function: {
+      name: 'gmail_label_add',
+      description: 'Add one or more labels to a Gmail message by message ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          messageId: { type: 'string', description: 'Gmail message ID' },
+          labels: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Label names or IDs to add (e.g. "IMPORTANT", "STARRED", "School")',
+          },
+        },
+        required: ['messageId', 'labels'],
+      },
+    },
+  },
+  gmail_label_remove: {
+    type: 'function',
+    function: {
+      name: 'gmail_label_remove',
+      description: 'Remove one or more labels from a Gmail message by message ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          messageId: { type: 'string', description: 'Gmail message ID' },
+          labels: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Label names or IDs to remove',
+          },
+        },
+        required: ['messageId', 'labels'],
+      },
+    },
+  },
+  gmail_mark_read: {
+    type: 'function',
+    function: {
+      name: 'gmail_mark_read',
+      description: 'Mark a Gmail message as read by removing the UNREAD label.',
+      parameters: {
+        type: 'object',
+        properties: {
+          messageId: { type: 'string', description: 'Gmail message ID' },
+        },
+        required: ['messageId'],
+      },
+    },
+  },
+  gmail_mark_unread: {
+    type: 'function',
+    function: {
+      name: 'gmail_mark_unread',
+      description: 'Mark a Gmail message as unread by adding the UNREAD label.',
+      parameters: {
+        type: 'object',
+        properties: {
+          messageId: { type: 'string', description: 'Gmail message ID' },
+        },
+        required: ['messageId'],
       },
     },
   },
@@ -899,11 +1155,17 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
     'google_capabilities',
     // Google auth status — always available (even before linking)
     'google_auth_status',
+    // Google scope diagnostics — always available (even before linking)
+    'google_scope_status',
     // Google data tools — only when user has linked their Google account
     ...(hasGoogleAuth ? [
       'google_drive_list', 'google_drive_create_file', 'google_drive_create_folder', 'google_drive_update_file', 'google_drive_delete_file',
       'google_calendar_list', 'google_calendar_create_event', 'google_calendar_update_event', 'google_calendar_delete_event',
       'gmail_read_unread', 'gmail_inbox_read',
+      ...(GOOGLE_AGENT_V2_ENABLED ? [
+        'gmail_send', 'gmail_reply', 'gmail_draft_create',
+        'gmail_label_add', 'gmail_label_remove', 'gmail_mark_read', 'gmail_mark_unread',
+      ] : []),
       'google_tasks_list', 'google_tasks_create', 'google_tasks_update', 'google_tasks_delete',
       'google_classroom_get_assignments',
       'google_classroom_list_courses', 'google_classroom_list_coursework',
@@ -972,6 +1234,18 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
       }
     }
 
+    async function runGoogleTool(service, action, fn) {
+      try {
+        const result = await fn();
+        await logGoogleToolMetric(db, userId, service, action, 'success');
+        return result;
+      } catch (err) {
+        const details = categorizeGoogleError(err);
+        await logGoogleToolMetric(db, userId, service, action, 'error', details.category);
+        return normalizeGoogleError(err, userId);
+      }
+    }
+
     switch (toolName) {
 
       // ── Web ───────────────────────────────────────────────────────────────
@@ -1031,47 +1305,11 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
 
       // ── Google Integrations ───────────────────────────────────────────────
       case 'google_capabilities': {
-        const has = (name) => keys.includes(name);
-        const lines = [];
-        lines.push(`Google linked: ${hasGoogleAuth ? 'yes' : 'no'}`);
-
-        if (!hasGoogleAuth) {
-          lines.push('Google tools are currently locked until the account is linked.');
-          const relinkUrl = buildGoogleRelinkUrl(userId);
-          lines.push(relinkUrl ? `Link URL: ${relinkUrl}` : 'Link URL unavailable. Configure GOOGLE_OAUTH_BASE_URL and use /linkgoogle.');
-          return lines.join('\n');
-        }
-
-        lines.push(
-          `Drive: ${has('google_drive_list') ? 'view/list enabled' : 'view/list disabled'}; ` +
-          `create_file=${has('google_drive_create_file') ? 'yes' : 'no'}, ` +
-          `create_folder=${has('google_drive_create_folder') ? 'yes' : 'no'}, ` +
-          `update=${has('google_drive_update_file') ? 'yes' : 'no'}, ` +
-          `delete=${has('google_drive_delete_file') ? 'yes' : 'no'}`
+        return JSON.stringify(
+          buildGoogleCapabilitiesPayload({ hasGoogleAuth, keys, userId }),
+          null,
+          2
         );
-        lines.push(
-          `Calendar: ${has('google_calendar_list') ? 'view/list enabled' : 'view/list disabled'}; ` +
-          `create=${has('google_calendar_create_event') ? 'yes' : 'no'}, ` +
-          `update=${has('google_calendar_update_event') ? 'yes' : 'no'}, ` +
-          `delete=${has('google_calendar_delete_event') ? 'yes' : 'no'}`
-        );
-        lines.push(
-          `Gmail: unread_read=${has('gmail_read_unread') ? 'yes' : 'no'}, ` +
-          `inbox_read_with_content=${has('gmail_inbox_read') ? 'yes' : 'no'}`
-        );
-        lines.push(
-          `Tasks: list=${has('google_tasks_list') ? 'yes' : 'no'}, ` +
-          `create=${has('google_tasks_create') ? 'yes' : 'no'}, ` +
-          `update=${has('google_tasks_update') ? 'yes' : 'no'}, ` +
-          `delete=${has('google_tasks_delete') ? 'yes' : 'no'}`
-        );
-        lines.push(
-          `Classroom: assignments=${has('google_classroom_get_assignments') ? 'yes' : 'no'}, ` +
-          `courses=${has('google_classroom_list_courses') ? 'yes' : 'no'}, ` +
-          `coursework_by_course=${has('google_classroom_list_coursework') ? 'yes' : 'no'}`
-        );
-        lines.push('Note: Classroom tools are read-focused in this build.');
-        return lines.join('\n');
       }
       case 'google_auth_status': {
         const tokens = await getGoogleTokens(db, userId);
@@ -1081,27 +1319,31 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
           : 'Relink URL unavailable because GOOGLE_OAUTH_BASE_URL is not configured.';
         return `Google auth status: ${formatGoogleAuthStatus(tokens)}.\n${relinkHint}`;
       }
+      case 'google_scope_status': {
+        const tokens = await getGoogleTokens(db, userId);
+        return JSON.stringify(buildGoogleScopeStatusPayload({ tokens, userId }), null, 2);
+      }
       case 'google_drive_list':
-        try {
+        return runGoogleTool('drive', 'list', async () => {
           const files = await listDriveFiles(db, userId, args.maxResults || 10, args.query || '');
           if (!files || !files.length) return 'No files found in Drive.';
           return files.map(f => {
             const modified = f.modifiedTime ? ` (modified: ${f.modifiedTime.slice(0, 10)})` : '';
             return `- ${f.name}${modified} [${f.mimeType || 'unknown'}] (ID: ${f.id})`;
           }).join('\n');
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_drive_create_file':
-        try {
+        return runGoogleTool('drive', 'create_file', async () => {
           const file = await createDriveFile(db, userId, args.name, args.content, args.mimeType || 'text/plain');
           return `Created Drive file "${file.name}" (ID: ${file.id})${file.webViewLink ? `\nOpen: ${file.webViewLink}` : ''}`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_drive_create_folder':
-        try {
+        return runGoogleTool('drive', 'create_folder', async () => {
           const folder = await createDriveFolder(db, userId, args.name, args.parentFolderId || '');
           return `Created Drive folder "${folder.name}" (ID: ${folder.id})${folder.webViewLink ? `\nOpen: ${folder.webViewLink}` : ''}`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_drive_update_file':
-        try {
+        return runGoogleTool('drive', 'update_file', async () => {
           if (args.name === undefined && args.content === undefined) {
             return 'Please provide at least one field to update: name and/or content.';
           }
@@ -1111,23 +1353,23 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             mimeType: args.mimeType,
           });
           return `Updated Drive file "${file.name}" (ID: ${file.id})`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_drive_delete_file':
-        try {
+        return runGoogleTool('drive', 'delete_file', async () => {
           await deleteDriveFile(db, userId, args.fileId);
           return `Deleted Drive file ID: ${args.fileId}`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_calendar_list':
-        try {
+        return runGoogleTool('calendar', 'list', async () => {
           const events = await listEvents(db, userId, 10, args.days || 7);
           if (!events || !events.length) return 'No upcoming events found.';
           return events.map(e => {
             const when = e.start?.dateTime || e.start?.date || 'unknown time';
             return `- ${e.summary || '(No title)'} at ${when} (ID: ${e.id})`;
           }).join('\n');
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_calendar_create_event':
-        try {
+        return runGoogleTool('calendar', 'create_event', async () => {
           const event = await createCalendarEvent(db, userId, {
             summary: args.summary,
             description: args.description,
@@ -1137,9 +1379,9 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             timeZone: args.timeZone,
           });
           return `Created calendar event "${event.summary || '(No title)'}" (ID: ${event.id}) at ${event.start?.dateTime || event.start?.date || 'unknown time'}`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_calendar_update_event':
-        try {
+        return runGoogleTool('calendar', 'update_event', async () => {
           if (
             args.summary === undefined &&
             args.description === undefined &&
@@ -1158,14 +1400,14 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             timeZone: args.timeZone,
           });
           return `Updated calendar event "${event.summary || '(No title)'}" (ID: ${event.id})`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_calendar_delete_event':
-        try {
+        return runGoogleTool('calendar', 'delete_event', async () => {
           await deleteCalendarEvent(db, userId, args.eventId);
           return `Deleted calendar event ID: ${args.eventId}`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'gmail_read_unread':
-        try {
+        return runGoogleTool('gmail', 'read_unread', async () => {
           const emails = await listUnreadEmails(db, userId, args.maxResults || 10, args.query || '');
           if (!emails.length) return 'No unread emails.';
           return emails.map((m) => {
@@ -1173,9 +1415,9 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             const preview = body ? `\n  Content: ${body.slice(0, 280)}${body.length > 280 ? '...' : ''}` : '';
             return `- [${String(m.date || '').slice(0, 24)}] ${m.subject} — from ${m.from}${preview}`;
           }).join('\n');
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'gmail_inbox_read':
-        try {
+        return runGoogleTool('gmail', 'inbox_read', async () => {
           const emails = await listInboxEmails(
             db,
             userId,
@@ -1191,9 +1433,70 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             const preview = body ? `\n  Content: ${body.slice(0, 280)}${body.length > 280 ? '...' : ''}` : '';
             return `- [${status}] [${String(m.date || '').slice(0, 24)}] ${m.subject} — from ${m.from}${preview}`;
           }).join('\n');
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
+      case 'gmail_send':
+        return runGoogleTool('gmail', 'send', async () => {
+          const sent = await sendEmail(db, userId, {
+            to: args.to,
+            subject: args.subject,
+            body: args.body,
+            cc: args.cc,
+            bcc: args.bcc,
+            threadId: args.threadId,
+          });
+          return `Email sent successfully (Message ID: ${sent.id || 'unknown'})${sent.threadId ? `\nThread ID: ${sent.threadId}` : ''}`;
+        });
+      case 'gmail_reply':
+        return runGoogleTool('gmail', 'reply', async () => {
+          const sent = await replyToMessage(db, userId, {
+            messageId: args.messageId,
+            body: args.body,
+            to: args.to,
+            subject: args.subject,
+          });
+          return `Reply sent successfully (Message ID: ${sent.id || 'unknown'})${sent.threadId ? `\nThread ID: ${sent.threadId}` : ''}`;
+        });
+      case 'gmail_draft_create':
+        return runGoogleTool('gmail', 'draft_create', async () => {
+          const draft = await createDraft(db, userId, {
+            to: args.to,
+            subject: args.subject,
+            body: args.body,
+            cc: args.cc,
+            bcc: args.bcc,
+            threadId: args.threadId,
+          });
+          const messageId = draft.message?.id || 'unknown';
+          return `Draft created successfully (Draft ID: ${draft.id || 'unknown'}, Message ID: ${messageId})`;
+        });
+      case 'gmail_label_add':
+        return runGoogleTool('gmail', 'label_add', async () => {
+          if (!Array.isArray(args.labels) || !args.labels.length) {
+            return 'Please provide at least one label to add.';
+          }
+          const updated = await modifyMessageLabels(db, userId, args.messageId, { add: args.labels });
+          return `Labels added to message ${updated.id}. Current labels: ${(updated.labelIds || []).join(', ') || '(none)'}`;
+        });
+      case 'gmail_label_remove':
+        return runGoogleTool('gmail', 'label_remove', async () => {
+          if (!Array.isArray(args.labels) || !args.labels.length) {
+            return 'Please provide at least one label to remove.';
+          }
+          const updated = await modifyMessageLabels(db, userId, args.messageId, { remove: args.labels });
+          return `Labels removed from message ${updated.id}. Current labels: ${(updated.labelIds || []).join(', ') || '(none)'}`;
+        });
+      case 'gmail_mark_read':
+        return runGoogleTool('gmail', 'mark_read', async () => {
+          const updated = await markMessageRead(db, userId, args.messageId);
+          return `Marked message ${updated.id} as read.`;
+        });
+      case 'gmail_mark_unread':
+        return runGoogleTool('gmail', 'mark_unread', async () => {
+          const updated = await markMessageUnread(db, userId, args.messageId);
+          return `Marked message ${updated.id} as unread.`;
+        });
       case 'google_tasks_list':
-        try {
+        return runGoogleTool('tasks', 'list', async () => {
           const tasks = await listTasks(db, userId, args.maxResults || 20, Boolean(args.showCompleted));
           if (!tasks.length) return 'No tasks found.';
           return tasks.map(t => {
@@ -1201,18 +1504,18 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             const due = t.due ? ` | due: ${String(t.due).slice(0, 10)}` : '';
             return `- ${t.title || '(Untitled task)'} (${status})${due} (ID: ${t.id})`;
           }).join('\n');
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_tasks_create':
-        try {
+        return runGoogleTool('tasks', 'create', async () => {
           const task = await createTask(db, userId, {
             title: args.title,
             notes: args.notes,
             due: args.due,
           });
           return `Created task "${task.title || '(Untitled task)'}" (ID: ${task.id})`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_tasks_update':
-        try {
+        return runGoogleTool('tasks', 'update', async () => {
           if (
             args.title === undefined &&
             args.notes === undefined &&
@@ -1228,36 +1531,36 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
             status: args.status,
           });
           return `Updated task "${task.title || '(Untitled task)'}" (ID: ${task.id})`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_tasks_delete':
-        try {
+        return runGoogleTool('tasks', 'delete', async () => {
           await deleteTask(db, userId, args.taskId);
           return `Deleted task ID: ${args.taskId}`;
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_classroom_get_assignments':
-        try {
+        return runGoogleTool('classroom', 'get_assignments', async () => {
           const assignments = await listUpcomingAssignments(db, userId);
           if (!assignments.length) return 'No upcoming assignments found across your courses.';
           return assignments.map(a => {
             const due = a.dueDate ? `due ${a.dueDate}` : 'no due date';
             return `- [${a.courseName}] ${a.title} (${due})${a.alternateLink ? `\n  Link: ${a.alternateLink}` : ''}`;
           }).join('\n');
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_classroom_list_courses':
-        try {
+        return runGoogleTool('classroom', 'list_courses', async () => {
           const courses = await listCourses(db, userId);
           if (!courses.length) return 'No courses found in Classroom.';
           return courses.map(c => `- ${c.name} (ID: ${c.id})`).join('\n');
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
       case 'google_classroom_list_coursework':
-        try {
+        return runGoogleTool('classroom', 'list_coursework', async () => {
           const work = await listCoursework(db, userId, args.courseId);
           if (!work.length) return 'No coursework found for this course.';
           return work.map(w => {
             const due = w.dueDate ? `${w.dueDate.year}-${String(w.dueDate.month).padStart(2,'0')}-${String(w.dueDate.day).padStart(2,'0')}` : 'no date';
             return `- ${w.title} (due: ${due}) (ID: ${w.id})`;
           }).join('\n');
-        } catch (e) { return normalizeGoogleError(e, userId); }
+        });
 
 
       // ── Shell ─────────────────────────────────────────────────────────────
