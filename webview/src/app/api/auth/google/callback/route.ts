@@ -29,13 +29,13 @@ export async function GET(request: Request) {
 
         const docRef = db.collection('users').doc(String(state)).collection('google_auth').doc('tokens');
         const updateData: any = {
-            google_access_token: tokens.access_token || '',
-            google_expiry_date: tokens.expiry_date || 0,
-            google_updated_at: admin.firestore.FieldValue.serverTimestamp()
+            access_token: tokens.access_token || '',
+            expiry_date: tokens.expiry_date || 0,
+            updated_at: admin.firestore.FieldValue.serverTimestamp()
         };
 
         if (tokens.refresh_token) {
-            updateData.google_refresh_token = tokens.refresh_token;
+            updateData.refresh_token = tokens.refresh_token;
         }
 
         await docRef.set(updateData, { merge: true });
