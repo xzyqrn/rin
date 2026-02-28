@@ -21,9 +21,19 @@ const {
 } = require('./database');
 const {
   listDriveFiles,
+  createDriveFile,
+  updateDriveFile,
+  deleteDriveFile,
   listEvents,
+  createCalendarEvent,
+  updateCalendarEvent,
+  deleteCalendarEvent,
   listUnreadEmails,
+  listInboxEmails,
   listTasks,
+  createTask,
+  updateTask,
+  deleteTask,
   listCourses,
   listCoursework,
   listUpcomingAssignments,
@@ -266,12 +276,60 @@ const DEF = {
     type: 'function',
     function: {
       name: 'google_drive_list',
-      description: 'List recent files in the user\'s connected Google Drive. Use when the user asks about their files, documents, or wants to find something they saved. Pass a query to filter by filename.',
+      description: 'List files in the user\'s connected Google Drive. Use when the user asks about their files, documents, or wants to find something they saved. Pass a query to filter by filename.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Optional filename search term to filter results (e.g. "resume", "budget 2024")' },
+          maxResults: { type: 'number', description: 'Max files to return (default: 10, max: 50)' },
         },
+      },
+    },
+  },
+  google_drive_create_file: {
+    type: 'function',
+    function: {
+      name: 'google_drive_create_file',
+      description: 'Create a new text-based file in Google Drive. Use for add/create requests.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'File name, e.g. notes.txt' },
+          content: { type: 'string', description: 'File content' },
+          mimeType: { type: 'string', description: 'MIME type (default text/plain)' },
+        },
+        required: ['name', 'content'],
+      },
+    },
+  },
+  google_drive_update_file: {
+    type: 'function',
+    function: {
+      name: 'google_drive_update_file',
+      description: 'Update an existing Google Drive file by ID (rename and/or replace content).',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Drive file ID' },
+          name: { type: 'string', description: 'Optional new file name' },
+          content: { type: 'string', description: 'Optional replacement content' },
+          mimeType: { type: 'string', description: 'MIME type for content updates (default text/plain)' },
+        },
+        required: ['fileId'],
+      },
+    },
+  },
+  google_drive_delete_file: {
+    type: 'function',
+    function: {
+      name: 'google_drive_delete_file',
+      description: 'Delete a Google Drive file by ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Drive file ID' },
+        },
+        required: ['fileId'],
       },
     },
   },
@@ -288,11 +346,64 @@ const DEF = {
       },
     },
   },
+  google_calendar_create_event: {
+    type: 'function',
+    function: {
+      name: 'google_calendar_create_event',
+      description: 'Create a Google Calendar event.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'Event title' },
+          start: { type: 'string', description: 'Start date/time in ISO (e.g. 2026-03-02T09:00:00+08:00 or 2026-03-02)' },
+          end: { type: 'string', description: 'End date/time in ISO (e.g. 2026-03-02T10:00:00+08:00 or 2026-03-03)' },
+          description: { type: 'string', description: 'Optional event description' },
+          location: { type: 'string', description: 'Optional location' },
+          timeZone: { type: 'string', description: 'Optional IANA timezone, e.g. Asia/Manila' },
+        },
+        required: ['summary', 'start', 'end'],
+      },
+    },
+  },
+  google_calendar_update_event: {
+    type: 'function',
+    function: {
+      name: 'google_calendar_update_event',
+      description: 'Update a Google Calendar event by event ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          eventId: { type: 'string', description: 'Calendar event ID' },
+          summary: { type: 'string' },
+          start: { type: 'string' },
+          end: { type: 'string' },
+          description: { type: 'string' },
+          location: { type: 'string' },
+          timeZone: { type: 'string' },
+        },
+        required: ['eventId'],
+      },
+    },
+  },
+  google_calendar_delete_event: {
+    type: 'function',
+    function: {
+      name: 'google_calendar_delete_event',
+      description: 'Delete a Google Calendar event by event ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          eventId: { type: 'string', description: 'Calendar event ID' },
+        },
+        required: ['eventId'],
+      },
+    },
+  },
   gmail_read_unread: {
     type: 'function',
     function: {
       name: 'gmail_read_unread',
-      description: 'List unread emails in the user\'s Gmail inbox. Use when the user asks about new emails, their inbox, or messages they\'ve received. Use query to filter by sender, subject, or keyword.',
+      description: 'Read unread emails in the user\'s Gmail inbox including content preview/body. Use query to filter by sender, subject, or keyword.',
       parameters: {
         type: 'object',
         properties: {
@@ -302,12 +413,82 @@ const DEF = {
       },
     },
   },
+  gmail_inbox_read: {
+    type: 'function',
+    function: {
+      name: 'gmail_inbox_read',
+      description: 'Read Gmail inbox messages (not just unread), including content preview/body.',
+      parameters: {
+        type: 'object',
+        properties: {
+          maxResults: { type: 'number', description: 'Max emails to return (default: 10)' },
+          query: { type: 'string', description: 'Optional Gmail query (e.g. "from:school.edu", "subject:invoice")' },
+          unreadOnly: { type: 'boolean', description: 'Set true to only return unread emails' },
+          includeBody: { type: 'boolean', description: 'Set false to return headers/snippet only' },
+        },
+      },
+    },
+  },
   google_tasks_list: {
     type: 'function',
     function: {
       name: 'google_tasks_list',
       description: 'List tasks from the user\'s Google Tasks. Use when the user mentions to-do items, pending tasks, or things they need to do.',
-      parameters: { type: 'object', properties: {} },
+      parameters: {
+        type: 'object',
+        properties: {
+          showCompleted: { type: 'boolean', description: 'Include completed tasks (default false)' },
+          maxResults: { type: 'number', description: 'Max tasks to return (default 20)' },
+        },
+      },
+    },
+  },
+  google_tasks_create: {
+    type: 'function',
+    function: {
+      name: 'google_tasks_create',
+      description: 'Create a new task in Google Tasks.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Task title' },
+          notes: { type: 'string', description: 'Optional task notes' },
+          due: { type: 'string', description: 'Optional due datetime in ISO format' },
+        },
+        required: ['title'],
+      },
+    },
+  },
+  google_tasks_update: {
+    type: 'function',
+    function: {
+      name: 'google_tasks_update',
+      description: 'Update a Google Task by task ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', description: 'Task ID' },
+          title: { type: 'string' },
+          notes: { type: 'string' },
+          due: { type: 'string', description: 'Due datetime in ISO format' },
+          status: { type: 'string', enum: ['needsAction', 'completed'] },
+        },
+        required: ['taskId'],
+      },
+    },
+  },
+  google_tasks_delete: {
+    type: 'function',
+    function: {
+      name: 'google_tasks_delete',
+      description: 'Delete a task from Google Tasks by task ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', description: 'Task ID' },
+        },
+        required: ['taskId'],
+      },
     },
   },
   google_classroom_get_assignments: {
@@ -694,8 +875,10 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
     'google_auth_status',
     // Google data tools — only when user has linked their Google account
     ...(hasGoogleAuth ? [
-      'google_drive_list', 'google_calendar_list', 'gmail_read_unread',
-      'google_tasks_list',
+      'google_drive_list', 'google_drive_create_file', 'google_drive_update_file', 'google_drive_delete_file',
+      'google_calendar_list', 'google_calendar_create_event', 'google_calendar_update_event', 'google_calendar_delete_event',
+      'gmail_read_unread', 'gmail_inbox_read',
+      'google_tasks_list', 'google_tasks_create', 'google_tasks_update', 'google_tasks_delete',
       'google_classroom_get_assignments',
       'google_classroom_list_courses', 'google_classroom_list_coursework',
     ] : []),
@@ -831,36 +1014,151 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
       }
       case 'google_drive_list':
         try {
-          const files = await listDriveFiles(db, userId, 10, args.query || '');
+          const files = await listDriveFiles(db, userId, args.maxResults || 10, args.query || '');
           if (!files || !files.length) return 'No files found in Drive.';
           return files.map(f => {
             const modified = f.modifiedTime ? ` (modified: ${f.modifiedTime.slice(0, 10)})` : '';
             return `- ${f.name}${modified} [${f.mimeType || 'unknown'}] (ID: ${f.id})`;
           }).join('\n');
         } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_drive_create_file':
+        try {
+          const file = await createDriveFile(db, userId, args.name, args.content, args.mimeType || 'text/plain');
+          return `Created Drive file "${file.name}" (ID: ${file.id})${file.webViewLink ? `\nOpen: ${file.webViewLink}` : ''}`;
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_drive_update_file':
+        try {
+          if (args.name === undefined && args.content === undefined) {
+            return 'Please provide at least one field to update: name and/or content.';
+          }
+          const file = await updateDriveFile(db, userId, args.fileId, {
+            name: args.name,
+            content: args.content,
+            mimeType: args.mimeType,
+          });
+          return `Updated Drive file "${file.name}" (ID: ${file.id})`;
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_drive_delete_file':
+        try {
+          await deleteDriveFile(db, userId, args.fileId);
+          return `Deleted Drive file ID: ${args.fileId}`;
+        } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_calendar_list':
         try {
           const events = await listEvents(db, userId, 10, args.days || 7);
           if (!events || !events.length) return 'No upcoming events found.';
-          return events.map(e => `- ${e.summary} at ${e.start.dateTime || e.start.date}`).join('\n');
+          return events.map(e => {
+            const when = e.start?.dateTime || e.start?.date || 'unknown time';
+            return `- ${e.summary || '(No title)'} at ${when} (ID: ${e.id})`;
+          }).join('\n');
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_calendar_create_event':
+        try {
+          const event = await createCalendarEvent(db, userId, {
+            summary: args.summary,
+            description: args.description,
+            location: args.location,
+            start: args.start,
+            end: args.end,
+            timeZone: args.timeZone,
+          });
+          return `Created calendar event "${event.summary || '(No title)'}" (ID: ${event.id}) at ${event.start?.dateTime || event.start?.date || 'unknown time'}`;
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_calendar_update_event':
+        try {
+          if (
+            args.summary === undefined &&
+            args.description === undefined &&
+            args.location === undefined &&
+            args.start === undefined &&
+            args.end === undefined
+          ) {
+            return 'Please provide at least one field to update: summary, description, location, start, or end.';
+          }
+          const event = await updateCalendarEvent(db, userId, args.eventId, {
+            summary: args.summary,
+            description: args.description,
+            location: args.location,
+            start: args.start,
+            end: args.end,
+            timeZone: args.timeZone,
+          });
+          return `Updated calendar event "${event.summary || '(No title)'}" (ID: ${event.id})`;
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_calendar_delete_event':
+        try {
+          await deleteCalendarEvent(db, userId, args.eventId);
+          return `Deleted calendar event ID: ${args.eventId}`;
         } catch (e) { return normalizeGoogleError(e, userId); }
       case 'gmail_read_unread':
         try {
           const emails = await listUnreadEmails(db, userId, args.maxResults || 10, args.query || '');
           if (!emails.length) return 'No unread emails.';
-          return emails.map(m => {
-            const h = m.payload?.headers || [];
-            const subject = h.find(x => x.name === 'Subject')?.value || 'No Subject';
-            const from = h.find(x => x.name === 'From')?.value || 'Unknown';
-            const date = h.find(x => x.name === 'Date')?.value || '';
-            return `- [${date.slice(0, 16)}] ${subject} — from ${from}`;
+          return emails.map((m) => {
+            const body = String(m.bodyText || m.snippet || '').replace(/\s+/g, ' ').trim();
+            const preview = body ? `\n  Content: ${body.slice(0, 280)}${body.length > 280 ? '...' : ''}` : '';
+            return `- [${String(m.date || '').slice(0, 24)}] ${m.subject} — from ${m.from}${preview}`;
+          }).join('\n');
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'gmail_inbox_read':
+        try {
+          const emails = await listInboxEmails(
+            db,
+            userId,
+            args.maxResults || 10,
+            args.query || '',
+            args.includeBody !== false,
+            Boolean(args.unreadOnly)
+          );
+          if (!emails.length) return args.unreadOnly ? 'No unread emails.' : 'No inbox emails found.';
+          return emails.map((m) => {
+            const status = m.unread ? 'UNREAD' : 'READ';
+            const body = String(m.bodyText || m.snippet || '').replace(/\s+/g, ' ').trim();
+            const preview = body ? `\n  Content: ${body.slice(0, 280)}${body.length > 280 ? '...' : ''}` : '';
+            return `- [${status}] [${String(m.date || '').slice(0, 24)}] ${m.subject} — from ${m.from}${preview}`;
           }).join('\n');
         } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_tasks_list':
         try {
-          const tasks = await listTasks(db, userId);
+          const tasks = await listTasks(db, userId, args.maxResults || 20, Boolean(args.showCompleted));
           if (!tasks.length) return 'No tasks found.';
-          return tasks.map(t => `- ${t.title}`).join('\n');
+          return tasks.map(t => {
+            const status = t.status === 'completed' ? 'completed' : 'pending';
+            const due = t.due ? ` | due: ${String(t.due).slice(0, 10)}` : '';
+            return `- ${t.title || '(Untitled task)'} (${status})${due} (ID: ${t.id})`;
+          }).join('\n');
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_tasks_create':
+        try {
+          const task = await createTask(db, userId, {
+            title: args.title,
+            notes: args.notes,
+            due: args.due,
+          });
+          return `Created task "${task.title || '(Untitled task)'}" (ID: ${task.id})`;
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_tasks_update':
+        try {
+          if (
+            args.title === undefined &&
+            args.notes === undefined &&
+            args.due === undefined &&
+            args.status === undefined
+          ) {
+            return 'Please provide at least one field to update: title, notes, due, or status.';
+          }
+          const task = await updateTask(db, userId, args.taskId, {
+            title: args.title,
+            notes: args.notes,
+            due: args.due,
+            status: args.status,
+          });
+          return `Updated task "${task.title || '(Untitled task)'}" (ID: ${task.id})`;
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_tasks_delete':
+        try {
+          await deleteTask(db, userId, args.taskId);
+          return `Deleted task ID: ${args.taskId}`;
         } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_classroom_get_assignments':
         try {
@@ -868,7 +1166,7 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
           if (!assignments.length) return 'No upcoming assignments found across your courses.';
           return assignments.map(a => {
             const due = a.dueDate ? `due ${a.dueDate}` : 'no due date';
-            return `- [${a.courseName}] ${a.title} (${due})`;
+            return `- [${a.courseName}] ${a.title} (${due})${a.alternateLink ? `\n  Link: ${a.alternateLink}` : ''}`;
           }).join('\n');
         } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_classroom_list_courses':

@@ -39,12 +39,12 @@ export function getOAuth2Client(baseUrlOverride?: string) {
 export function getAuthUrl(state: string, baseUrlOverride?: string) {
     const oauth2Client = getOAuth2Client(baseUrlOverride);
     const scopes = [
-        'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive',
         'https://www.googleapis.com/auth/calendar',
         'https://www.googleapis.com/auth/gmail.modify',
         'https://www.googleapis.com/auth/classroom.courses.readonly',
         'https://www.googleapis.com/auth/classroom.coursework.me',
+        'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
         'https://www.googleapis.com/auth/tasks'
     ];
 

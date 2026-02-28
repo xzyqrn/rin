@@ -102,10 +102,14 @@ Rin uses function calling to take real-world actions.
 | | `write_file` | Create or overwrite a file in your folder |
 | | `list_directory` | See what files you have uploaded/created |
 | | `send_file` | Send a file from your VPS folder back to you on Telegram |
-| **Google** | `google_drive_list` | List recent files in your Google Drive |
-| (Auth req.)| `google_calendar_list` | List upcoming events from your Calendar |
-| | `gmail_read_unread` | Check your Gmail inbox for unread messages |
-| | `google_tasks_list` | List items in your Google Tasks |
+| **Google** | `google_drive_list` | List files in your Google Drive |
+| (Auth req.)| `google_drive_create_file / update / delete` | Create, edit, and delete Drive files by ID |
+| | `google_calendar_list` | List upcoming events from Calendar |
+| | `google_calendar_create_event / update / delete` | Create, edit, and delete Calendar events |
+| | `gmail_inbox_read` | Read inbox messages including content preview/body |
+| | `gmail_read_unread` | Read unread inbox messages with content |
+| | `google_tasks_list` | List items in Google Tasks |
+| | `google_tasks_create / update / delete` | Create, edit, and delete Tasks |
 | | `google_classroom_...` | List Classroom courses and assignments |
 
 *\*All file operations for non-admin users are strictly sandboxed to their dedicated `uploads/<user_id>` directory.*
@@ -222,6 +226,7 @@ Rin uses **Google Cloud Firestore**.
 - **`Google authentication expired or was revoked.`**: Relink your Google account and approve permissions again.
 - **`Google denied this request due to missing permissions/scopes.`**: Relink and grant full requested scopes on consent screen.
 - **`Auth error: access_denied`**: You declined the permissions on the Google consent screen.
+- **After new Google features are deployed**: Relink once via `/linkgoogle` so your token includes the newest scopes.
 
 ### Terminal & Shell
 - **`Command blocked by security policy`**: You tried to run a forbidden command (e.g., `rm -rf /`).
