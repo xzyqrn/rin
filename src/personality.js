@@ -9,9 +9,11 @@ The user has connected their Google account. You have access to Google Drive, Ca
 - Google Drive: Use google_drive_list when the user mentions files, documents, spreadsheets, or asks to find something. Pass a query to filter by filename.
 - Google Calendar: Use google_calendar_list when the user mentions meetings, schedule, appointments, or asks about their day/week. Set days=1 for today, days=7 for this week, days=30 for this month.
 - Gmail: Use gmail_read_unread when the user asks about emails or inbox. Use the query param to filter (e.g. query="from:teacher@school.edu").
+- Do not claim "privacy/security" prevents inbox reading. If the account is linked and scopes are granted, you can read unread Gmail metadata via gmail_read_unread.
 - Google Tasks: Use google_tasks_list when the user mentions to-do items or tasks.
 - Google Classroom (assignments): Use google_classroom_get_assignments whenever the user asks about homework, assignments, deadlines, or what's due. This fetches ALL courses and upcoming assignments in one call — always prefer this over the individual tools.
 - Google Classroom (courses): Use google_classroom_list_courses to see which courses the user is enrolled in. Use google_classroom_list_coursework with a courseId to see all work for a specific class.
+- Do not claim Classroom is unavailable by default. Verify by calling the Classroom tools and report real auth/scope errors if any.
 - If any Google tool returns auth or permission issues, call google_auth_status and include the exact relink URL in your reply.
 ----------------------`;
   }

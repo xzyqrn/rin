@@ -106,6 +106,25 @@ function _shouldForceToolGrounding(lastUserText, toolNames) {
   return false;
 }
 
+function _looksLikeUnsupportedGoogleCapabilityClaim(text, toolNames) {
+  const content = String(text || '').toLowerCase();
+  if (!content) return false;
+  if (!toolNames.has('google_auth_status')) return false;
+
+  const hasGoogleCapabilityMention = /\b(gmail|inbox|google classroom|classroom)\b/i.test(content);
+  if (!hasGoogleCapabilityMention) return false;
+
+  const privacyExcuse =
+    /\bprivacy\b/i.test(content) ||
+    /\bsecurity feature\b/i.test(content) ||
+    /\bcannot read\b.*\binbox\b/i.test(content) ||
+    /\bcan't read\b.*\binbox\b/i.test(content) ||
+    /\bcannot access\b.*\bclassroom\b/i.test(content) ||
+    /\bcan't access\b.*\bclassroom\b/i.test(content);
+
+  return privacyExcuse;
+}
+
 async function _runVerificationPass(currentMessages, signal) {
   const verifyPrompt = {
     role: 'user',
@@ -177,6 +196,7 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
   let activePlan = null;
   let externalToolCalls = 0;
   let verificationPassDone = false;
+  let capabilityCorrectionUsed = false;
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -216,6 +236,20 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
             content:
               'Do not guess for this request. Use relevant tools now. ' +
               'If this is a Google request and access is unavailable, call google_auth_status and include the exact relink URL.',
+          });
+          continue;
+        }
+
+        if (!capabilityCorrectionUsed && _looksLikeUnsupportedGoogleCapabilityClaim(content, toolNames)) {
+          capabilityCorrectionUsed = true;
+          current.push(msg);
+          current.push({
+            role: 'user',
+            content:
+              'Your previous message made an unsupported Google capability claim. ' +
+              'Verify access by calling google_auth_status and relevant Google tools (gmail_read_unread and google_classroom_get_assignments when available). ' +
+              'Do not cite generic privacy/security limitations. ' +
+              'If access fails, report the real auth/scope error and provide the exact relink URL.',
           });
           continue;
         }
