@@ -132,21 +132,27 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
 
           // ── Meta-cognitive tools: handled internally ──────────────────────
           if (toolName === 'think') {
-            // Thinking is silent — just acknowledge so the model can continue
+            const reasoning = args.reasoning || '';
+            console.log(`[Rin] 🧠 Thinking: ${reasoning.split('\\n')[0]}${reasoning.includes('\\n') ? '...' : ''}`);
             result = `Thought noted. Continue.`;
           } else if (toolName === 'plan') {
             activePlan = args.steps || [];
-            const numbered = activePlan.map((s, i) => `${i + 1}. ${s}`).join('\n');
-            result = `Plan set:\n${numbered}\n\nNow execute each step in order using the available tools.`;
+            const numbered = activePlan.map((s, i) => `${i + 1}. ${s}`).join('\\n');
+            console.log(`[Rin] 📋 Planning:\n${numbered}`);
+            result = `Plan set:\\n${numbered}\\n\\nNow execute each step in order using the available tools.`;
           } else if (toolName === 'reflect') {
+            console.log(`[Rin] 🔎 Reflecting: ${args.critique}`);
             if (args.revised_answer && args.revised_answer !== 'null') {
+              console.log(`[Rin] 💡 Revising answer.`);
               // Inject the improved answer as the final content and end the loop
               return args.revised_answer.trim();
             }
             result = 'Reflection complete — original answer is satisfactory.';
           } else {
             // ── Real external tools ──────────────────────────────────────────
+            console.log(`[Rin] 🛠️  Executing: ${toolName}(${JSON.stringify(args)})`);
             result = String(await executor(toolName, args));
+            console.log(`[Rin] ✅ Finished: ${toolName}`);
           }
         } catch (err) {
           const sanitized = (err.message || 'unknown error')
