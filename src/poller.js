@@ -21,12 +21,14 @@ function startPollers(db, telegram) {
   async function tickReminders() {
     const due = getDueReminders(db);
     for (const r of due) {
+      let sendOk = false;
       try {
         await telegram.sendMessage(r.user_id, `Reminder: ${r.message}`);
+        sendOk = true;
       } catch (err) {
         console.error(`[poller] Reminder #${r.id} failed:`, err.message);
       } finally {
-        deleteFiredReminder(db, r.id);
+        if (sendOk) deleteFiredReminder(db, r.id);
       }
     }
   }

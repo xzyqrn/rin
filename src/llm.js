@@ -48,8 +48,9 @@ async function chat(messages, { signal } = {}) {
 /**
  * Compress a list of old conversation messages into a single summary string.
  * Used when the conversation history grows too large.
+ * @param {AbortSignal} [signal] - optional abort signal for /cancel
  */
-async function summarizeHistory(messages) {
+async function summarizeHistory(messages, signal) {
   const transcript = messages
     .filter((m) => m.role !== 'system')
     .map((m) => {
@@ -69,9 +70,11 @@ async function summarizeHistory(messages) {
         },
         { role: 'user', content: transcript },
       ],
+      signal,
     });
     _trackUsage(completion);
-    return (completion.choices[0].message.content || '').trim();
+    const out = (completion.choices[0].message.content || '').trim();
+    return out;
   } catch {
     return '[Earlier conversation compressed — summary unavailable]';
   }

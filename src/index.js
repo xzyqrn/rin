@@ -27,6 +27,10 @@ initLlm(db);
 const webhookRef = { current: null };
 const bot = createBot(db, { webhookRef });
 
+// Start reminder + health-check pollers immediately so they run even before launch() resolves
+startPollers(db, bot.telegram);
+console.log('[poller] Reminder + health-check pollers started.');
+
 bot.launch().then(() => {
   console.log('[bot] Rin is online.');
 
@@ -35,10 +39,6 @@ bot.launch().then(() => {
     { command: 'myfiles', description: 'List your uploaded files' },
     { command: 'cancel', description: 'Cancel an ongoing request' }
   ]).catch(err => console.error('[bot] Failed to set commands:', err));
-
-  startPollers(db, bot.telegram);
-  console.log('[poller] Reminder + health-check pollers started.');
-
   initCron(db, bot.telegram);
 
   if (process.env.ENABLE_WEBHOOKS !== 'false') {

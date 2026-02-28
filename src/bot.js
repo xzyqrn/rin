@@ -24,7 +24,11 @@ const MIN_FACT_EXTRACTION_LENGTH = 20;
 // Per-user AbortController map for /cancel support
 const activeRequests = new Map();
 
-function isAdmin(ctx) { return ADMIN_IDS.includes(ctx.from?.id); }
+function isAdmin(ctx) {
+  const fromId = ctx.from?.id;
+  const admin = ADMIN_IDS.includes(fromId);
+  return admin;
+}
 
 function buildSystemMessage(facts, admin) {
   const base = admin ? ADMIN_SYSTEM_PROMPT : SYSTEM_PROMPT;
@@ -46,9 +50,10 @@ function _rowToMessage(row) {
  * - If there are older turns above COMPRESS_THRESHOLD, compresses them into a
  *   single summary message (summarized asynchronously on first need).
  * @param {Array} memories - all stored memory rows (newest last)
+ * @param {AbortSignal} [signal] - optional abort signal for /cancel during summarization
  * @returns {Promise<Array>} resolved message array
  */
-async function buildMessageHistory(memories) {
+async function buildMessageHistory(memories, signal) {
   if (memories.length <= RECENT_TURNS) {
     return memories.map(_rowToMessage);
   }
@@ -64,7 +69,7 @@ async function buildMessageHistory(memories) {
 
   // Compress older turns into a summary
   const olderMessages = olderRows.map(_rowToMessage);
-  const summary = await summarizeHistory(olderMessages);
+  const summary = await summarizeHistory(olderMessages, signal);
   const summaryMessage = {
     role: 'assistant',
     content: `[Memory summary of earlier conversation]\n${summary}`,
@@ -135,11 +140,42 @@ function createBot(db, { webhookRef = null } = {}) {
       lines.push('/shell <cmd> — Execute a shell command directly');
       lines.push('/status — Quick system health snapshot');
     }
-    lines.push('\nI can also browse the web, set reminders, save notes, and store key-value data — just ask naturally.');
+    if (!admin) {
+      lines.push(
+        '\nI can help you with a wide range of tasks:\n',
+        'Information & Research',
+        '- Find and summarize information from the web',
+        '- Explain concepts in simple terms',
+        '- Help with research and fact-checking\n',
+        'Writing & Editing',
+        '- Draft emails, articles, stories, or scripts',
+        '- Edit and proofread text',
+        '- Brainstorm ideas and outlines\n',
+        'Analysis & Problem-Solving',
+        '- Break down complex problems',
+        '- Analyze data or text',
+        '- Help with coding concepts and debugging\n',
+        'Tools & Organization',
+        '- Set reminders and manage tasks',
+        '- Save and retrieve notes',
+        '- Help with planning and scheduling\n',
+        'Creative & Casual',
+        '- Brainstorm creative ideas',
+        '- Play word games',
+        '- Have interesting conversations\n',
+        'Technical Help',
+        '- Explain how things work',
+        '- Help with documentation',
+        '- Suggest approaches to technical problems'
+      );
+    } else {
+      lines.push('\nI can also browse the web, set reminders, save notes, and store key-value data — just ask naturally.');
+    }
     if (admin) {
       lines.push('As an admin, I can manage cron jobs, health checks, webhooks, files, and monitor the server.');
     }
-    return ctx.reply(lines.join('\n'));
+    const helpText = lines.join('\n');
+    return ctx.reply(helpText);
   });
 
   // ── /cancel — abort an ongoing LLM request ────────────────────────────────
@@ -272,7 +308,7 @@ function createBot(db, { webhookRef = null } = {}) {
       const memories = getRecentMemories(db, userId, MEMORY_TURNS);
 
       // Build history (may include a compressed summary of older turns)
-      const historyMessages = await buildMessageHistory(memories);
+      const historyMessages = await buildMessageHistory(memories, controller.signal);
 
       // Inject a planning nudge for complex multi-step requests
       let systemContent = buildSystemMessage(facts, admin);
