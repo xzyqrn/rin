@@ -304,9 +304,15 @@ function createBot(db, { webhookRef = null } = {}) {
   // ── /status — quick health summary (admin) ─────────────────────────────────
   bot.command('status', async (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply("You don't have permission to do that.");
+    const statusMsg = await ctx.reply('Fetching system status...');
     const { getSystemHealth } = require('./capabilities/monitoring');
     const health = await getSystemHealth();
-    await ctx.reply(health);
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      undefined,
+      health
+    );
   });
 
   // ── Main text handler ──────────────────────────────────────────────────────
