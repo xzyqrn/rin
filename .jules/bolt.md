@@ -6,3 +6,7 @@
 ## 2025-02-15 - [SQLite WAL Mode Improves Write Performance]
 **Learning:** The default SQLite journal mode is `DELETE`, which requires waiting for physical disk syncing for every write transaction to guarantee durability, making write-heavy applications significantly slower. This application does a lot of small writes to log API calls, user messages, rate limiting, and metrics.
 **Action:** When working with SQLite on write-heavy apps, use `db.pragma('journal_mode = WAL');` and `db.pragma('synchronous = NORMAL');`. The Write-Ahead Log reduces fsyncs and improves concurrency, resulting in a 10x-100x speedup for write performance.
+
+## 2025-02-17 - Avoid db.prepare on every call
+**Learning:** `better-sqlite3` is fast, but calling `db.prepare()` on every single database function call introduces unnecessary overhead. For highly frequent operations (like `getAllFacts`, `saveMemory`, etc.), it's better to cache the prepared statements. Note that the cache must be per-database-connection to be safe.
+**Action:** Extract `db.prepare` calls into a lazy-initialization cache bound to the database instance itself (e.g. `db._statements = db._statements || {}`) to avoid reparsing the SQL on every call safely.

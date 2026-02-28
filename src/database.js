@@ -7,6 +7,12 @@ const fs = require('fs');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'rin.db');
 
+// ⚡ Bolt: Cache prepared statements on the database instance to avoid reparsing SQL on every call.
+function getStmt(db, sql) {
+  if (!db._statements) db._statements = {};
+  return db._statements[sql] || (db._statements[sql] = db.prepare(sql));
+}
+
 function initDb() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -140,13 +146,12 @@ function _runMigrations(db) {
 // ── Conversation memory ────────────────────────────────────────────────────────
 
 function saveMemory(db, userId, content) {
-  db.prepare('INSERT INTO memory (user_id, content) VALUES (?, ?)').run(userId, content);
+  getStmt(db, 'INSERT INTO memory (user_id, content) VALUES (?, ?)').run(userId, content);
 }
 
 function getRecentMemories(db, userId, limit) {
   const count = limit || parseInt(process.env.MEMORY_TURNS || '20', 10);
-  return db
-    .prepare('SELECT content FROM memory WHERE user_id = ? ORDER BY id DESC LIMIT ?')
+  return getStmt(db, 'SELECT content FROM memory WHERE user_id = ? ORDER BY id DESC LIMIT ?')
     .all(userId, count)
     .reverse();
 }
@@ -154,45 +159,45 @@ function getRecentMemories(db, userId, limit) {
 // ── User facts ─────────────────────────────────────────────────────────────────
 
 function upsertFact(db, userId, key, value) {
-  db.prepare('INSERT OR REPLACE INTO user_facts (user_id, key, value) VALUES (?, ?, ?)')
+  getStmt(db, 'INSERT OR REPLACE INTO user_facts (user_id, key, value) VALUES (?, ?, ?)')
     .run(userId, key.trim().toLowerCase(), String(value).trim());
 }
 
 function getAllFacts(db, userId) {
-  return db.prepare('SELECT key, value FROM user_facts WHERE user_id = ?').all(userId)
+  return getStmt(db, 'SELECT key, value FROM user_facts WHERE user_id = ?').all(userId)
     .reduce((acc, { key, value }) => { acc[key] = value; return acc; }, {});
 }
 
 // ── Reminders ─────────────────────────────────────────────────────────────────
 
 function addReminder(db, userId, message, fireAt) {
-  return db.prepare('INSERT INTO reminders (user_id, message, fire_at) VALUES (?, ?, ?)')
+  return getStmt(db, 'INSERT INTO reminders (user_id, message, fire_at) VALUES (?, ?, ?)')
     .run(userId, message, fireAt).lastInsertRowid;
 }
 
 function getPendingReminders(db, userId) {
-  return db.prepare('SELECT id, message, fire_at FROM reminders WHERE user_id = ? ORDER BY fire_at ASC')
+  return getStmt(db, 'SELECT id, message, fire_at FROM reminders WHERE user_id = ? ORDER BY fire_at ASC')
     .all(userId);
 }
 
 function deleteReminder(db, userId, id) {
-  return db.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?')
+  return getStmt(db, 'DELETE FROM reminders WHERE id = ? AND user_id = ?')
     .run(id, userId).changes > 0;
 }
 
 function getDueReminders(db) {
-  return db.prepare('SELECT * FROM reminders WHERE fire_at <= ? ORDER BY fire_at ASC')
+  return getStmt(db, 'SELECT * FROM reminders WHERE fire_at <= ? ORDER BY fire_at ASC')
     .all(Math.floor(Date.now() / 1000));
 }
 
 function deleteFiredReminder(db, id) {
-  db.prepare('DELETE FROM reminders WHERE id = ?').run(id);
+  getStmt(db, 'DELETE FROM reminders WHERE id = ?').run(id);
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
 function upsertNote(db, userId, title, content) {
-  db.prepare(`
+  getStmt(db, `
     INSERT INTO notes (user_id, title, content)
     VALUES (?, ?, ?)
     ON CONFLICT(user_id, title) DO UPDATE SET
@@ -203,22 +208,22 @@ function upsertNote(db, userId, title, content) {
 function getNotes(db, userId, search = null) {
   if (search) {
     const q = `%${search}%`;
-    return db.prepare('SELECT id, title, content FROM notes WHERE user_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY updated_at DESC')
+    return getStmt(db, 'SELECT id, title, content FROM notes WHERE user_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY updated_at DESC')
       .all(userId, q, q);
   }
-  return db.prepare('SELECT id, title, content FROM notes WHERE user_id = ? ORDER BY updated_at DESC')
+  return getStmt(db, 'SELECT id, title, content FROM notes WHERE user_id = ? ORDER BY updated_at DESC')
     .all(userId);
 }
 
 function deleteNote(db, userId, title) {
-  return db.prepare('DELETE FROM notes WHERE user_id = ? AND title = ?')
+  return getStmt(db, 'DELETE FROM notes WHERE user_id = ? AND title = ?')
     .run(userId, title).changes > 0;
 }
 
 // ── Local storage ─────────────────────────────────────────────────────────────
 
 function storageSet(db, userId, key, value) {
-  db.prepare(`
+  getStmt(db, `
     INSERT INTO storage (user_id, key, value)
     VALUES (?, ?, ?)
     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = strftime('%s', 'now')
@@ -226,21 +231,21 @@ function storageSet(db, userId, key, value) {
 }
 
 function storageGet(db, userId, key) {
-  return db.prepare('SELECT value FROM storage WHERE user_id = ? AND key = ?').get(userId, key)?.value ?? null;
+  return getStmt(db, 'SELECT value FROM storage WHERE user_id = ? AND key = ?').get(userId, key)?.value ?? null;
 }
 
 function storageDelete(db, userId, key) {
-  return db.prepare('DELETE FROM storage WHERE user_id = ? AND key = ?').run(userId, key).changes > 0;
+  return getStmt(db, 'DELETE FROM storage WHERE user_id = ? AND key = ?').run(userId, key).changes > 0;
 }
 
 function storageList(db, userId) {
-  return db.prepare('SELECT key, value FROM storage WHERE user_id = ? ORDER BY key').all(userId);
+  return getStmt(db, 'SELECT key, value FROM storage WHERE user_id = ? ORDER BY key').all(userId);
 }
 
 // ── Cron jobs ─────────────────────────────────────────────────────────────────
 
 function addCronJob(db, userId, name, schedule, action, payload) {
-  return db.prepare(`
+  return getStmt(db, `
     INSERT INTO cron_jobs (user_id, name, schedule, action, payload)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(user_id, name) DO UPDATE SET
@@ -252,21 +257,21 @@ function addCronJob(db, userId, name, schedule, action, payload) {
 }
 
 function listCronJobs(db, userId) {
-  return db.prepare('SELECT * FROM cron_jobs WHERE user_id = ? ORDER BY id').all(userId);
+  return getStmt(db, 'SELECT * FROM cron_jobs WHERE user_id = ? ORDER BY id').all(userId);
 }
 
 function deleteCronJob(db, userId, name) {
-  return db.prepare('DELETE FROM cron_jobs WHERE user_id = ? AND name = ?').run(userId, name).changes > 0;
+  return getStmt(db, 'DELETE FROM cron_jobs WHERE user_id = ? AND name = ?').run(userId, name).changes > 0;
 }
 
 function getAllEnabledCrons(db) {
-  return db.prepare('SELECT * FROM cron_jobs WHERE enabled = 1').all();
+  return getStmt(db, 'SELECT * FROM cron_jobs WHERE enabled = 1').all();
 }
 
 // ── Health checks ─────────────────────────────────────────────────────────────
 
 function addHealthCheck(db, userId, name, url, intervalMinutes = 5) {
-  db.prepare(`
+  getStmt(db, `
     INSERT INTO health_checks (user_id, name, url, interval_minutes)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(user_id, name) DO UPDATE SET
@@ -275,36 +280,36 @@ function addHealthCheck(db, userId, name, url, intervalMinutes = 5) {
 }
 
 function listHealthChecks(db, userId) {
-  return db.prepare('SELECT * FROM health_checks WHERE user_id = ? ORDER BY id').all(userId);
+  return getStmt(db, 'SELECT * FROM health_checks WHERE user_id = ? ORDER BY id').all(userId);
 }
 
 function deleteHealthCheck(db, userId, name) {
-  return db.prepare('DELETE FROM health_checks WHERE user_id = ? AND name = ?').run(userId, name).changes > 0;
+  return getStmt(db, 'DELETE FROM health_checks WHERE user_id = ? AND name = ?').run(userId, name).changes > 0;
 }
 
 function getHealthChecksToRun(db) {
   const now = Math.floor(Date.now() / 1000);
-  return db.prepare(`
+  return getStmt(db, `
     SELECT * FROM health_checks WHERE enabled = 1
     AND (last_checked IS NULL OR last_checked + interval_minutes * 60 <= ?)
   `).all(now);
 }
 
 function updateHealthCheckStatus(db, id, status) {
-  db.prepare('UPDATE health_checks SET last_checked = ?, last_status = ? WHERE id = ?')
+  getStmt(db, 'UPDATE health_checks SET last_checked = ?, last_status = ? WHERE id = ?')
     .run(Math.floor(Date.now() / 1000), status, id);
 }
 
 // ── API metrics ────────────────────────────────────────────────────────────────
 
 function logApiCall(db, model, tokensIn, tokensOut) {
-  db.prepare('INSERT INTO api_metrics (model, tokens_in, tokens_out) VALUES (?, ?, ?)')
+  getStmt(db, 'INSERT INTO api_metrics (model, tokens_in, tokens_out) VALUES (?, ?, ?)')
     .run(model, tokensIn || 0, tokensOut || 0);
 }
 
 function getApiUsageSummary(db, days = 7) {
   const since = Math.floor(Date.now() / 1000) - days * 86400;
-  return db.prepare(`
+  return getStmt(db, `
     SELECT model,
            COUNT(*) as calls,
            SUM(tokens_in) as tokens_in,
@@ -319,7 +324,7 @@ function getApiUsageSummary(db, days = 7) {
 function checkAndIncrementRateLimit(db, userId, limitPerHour) {
   const windowStart = Math.floor(Date.now() / 3600000) * 3600;
   // Atomic: only increment if currently under limit (or no row yet)
-  const upd = db.prepare(`
+  const upd = getStmt(db, `
     UPDATE rate_limits SET count = count + 1
     WHERE user_id = ? AND window_start = ? AND count < ?
   `).run(userId, windowStart, limitPerHour);
@@ -327,7 +332,7 @@ function checkAndIncrementRateLimit(db, userId, limitPerHour) {
     return true;
   }
   // No row or at/over limit — ensure row exists for this window, then allow only if we inserted (first message)
-  const ins = db.prepare(`
+  const ins = getStmt(db, `
     INSERT INTO rate_limits (user_id, window_start, count) VALUES (?, ?, 1)
     ON CONFLICT(user_id, window_start) DO NOTHING
   `).run(userId, windowStart);
