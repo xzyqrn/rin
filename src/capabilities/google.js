@@ -140,6 +140,22 @@ async function createDriveFile(db, userId, name, content, mimeType = 'text/plain
   return res.data;
 }
 
+async function createDriveFolder(db, userId, name, parentFolderId = '') {
+  const auth = await getAuthenticatedClient(db, userId);
+  const drive = google.drive({ version: 'v3', auth });
+  const requestBody = {
+    name,
+    mimeType: 'application/vnd.google-apps.folder',
+    ...(parentFolderId ? { parents: [parentFolderId] } : {}),
+  };
+  const res = await drive.files.create({
+    requestBody,
+    fields: 'id, name, mimeType, modifiedTime, webViewLink',
+    supportsAllDrives: true,
+  });
+  return res.data;
+}
+
 async function updateDriveFile(db, userId, fileId, { name, content, mimeType } = {}) {
   const auth = await getAuthenticatedClient(db, userId);
   const drive = google.drive({ version: 'v3', auth });
@@ -420,6 +436,7 @@ module.exports = {
   getAuthenticatedClient,
   listDriveFiles,
   createDriveFile,
+  createDriveFolder,
   updateDriveFile,
   deleteDriveFile,
   listEvents,

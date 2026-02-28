@@ -22,6 +22,7 @@ const {
 const {
   listDriveFiles,
   createDriveFile,
+  createDriveFolder,
   updateDriveFile,
   deleteDriveFile,
   listEvents,
@@ -307,6 +308,21 @@ const DEF = {
           mimeType: { type: 'string', description: 'MIME type (default text/plain)' },
         },
         required: ['name', 'content'],
+      },
+    },
+  },
+  google_drive_create_folder: {
+    type: 'function',
+    function: {
+      name: 'google_drive_create_folder',
+      description: 'Create a new folder in Google Drive. Optionally place it inside a parent folder.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Folder name' },
+          parentFolderId: { type: 'string', description: 'Optional parent folder ID. Omit to create in root.' },
+        },
+        required: ['name'],
       },
     },
   },
@@ -885,7 +901,7 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
     'google_auth_status',
     // Google data tools — only when user has linked their Google account
     ...(hasGoogleAuth ? [
-      'google_drive_list', 'google_drive_create_file', 'google_drive_update_file', 'google_drive_delete_file',
+      'google_drive_list', 'google_drive_create_file', 'google_drive_create_folder', 'google_drive_update_file', 'google_drive_delete_file',
       'google_calendar_list', 'google_calendar_create_event', 'google_calendar_update_event', 'google_calendar_delete_event',
       'gmail_read_unread', 'gmail_inbox_read',
       'google_tasks_list', 'google_tasks_create', 'google_tasks_update', 'google_tasks_delete',
@@ -1028,7 +1044,8 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
 
         lines.push(
           `Drive: ${has('google_drive_list') ? 'view/list enabled' : 'view/list disabled'}; ` +
-          `create=${has('google_drive_create_file') ? 'yes' : 'no'}, ` +
+          `create_file=${has('google_drive_create_file') ? 'yes' : 'no'}, ` +
+          `create_folder=${has('google_drive_create_folder') ? 'yes' : 'no'}, ` +
           `update=${has('google_drive_update_file') ? 'yes' : 'no'}, ` +
           `delete=${has('google_drive_delete_file') ? 'yes' : 'no'}`
         );
@@ -1077,6 +1094,11 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
         try {
           const file = await createDriveFile(db, userId, args.name, args.content, args.mimeType || 'text/plain');
           return `Created Drive file "${file.name}" (ID: ${file.id})${file.webViewLink ? `\nOpen: ${file.webViewLink}` : ''}`;
+        } catch (e) { return normalizeGoogleError(e, userId); }
+      case 'google_drive_create_folder':
+        try {
+          const folder = await createDriveFolder(db, userId, args.name, args.parentFolderId || '');
+          return `Created Drive folder "${folder.name}" (ID: ${folder.id})${folder.webViewLink ? `\nOpen: ${folder.webViewLink}` : ''}`;
         } catch (e) { return normalizeGoogleError(e, userId); }
       case 'google_drive_update_file':
         try {

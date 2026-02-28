@@ -104,7 +104,7 @@ Rin uses function calling to take real-world actions.
 | | `list_directory` | See what files you have uploaded/created |
 | | `send_file` | Send a file from your VPS folder back to you on Telegram |
 | **Google** | `google_drive_list` | List files in your Google Drive |
-| (Auth req.)| `google_drive_create_file / update / delete` | Create, edit, and delete Drive files by ID |
+| (Auth req.)| `google_drive_create_file / create_folder / update / delete` | Create files and folders, edit, and delete Drive items by ID |
 | | `google_calendar_list` | List upcoming events from Calendar |
 | | `google_calendar_create_event / update / delete` | Create, edit, and delete Calendar events |
 | | `gmail_inbox_read` | Read inbox messages including content preview/body |

@@ -7,7 +7,7 @@ function _buildGoogleSection(hasGoogleAuth) {
 The user has connected their Google account. You have access to Google Drive, Calendar, Gmail, Tasks, and Classroom. Use them proactively when relevant:
 - Always stay tool-grounded for Google data. Never guess mailbox contents, events, or assignments.
 - Google Drive: Use google_drive_list when the user mentions files, documents, spreadsheets, or asks to find something. Pass a query to filter by filename.
-- For Drive modifications (create/edit/delete), use google_drive_create_file, google_drive_update_file, and google_drive_delete_file.
+- For Drive modifications (create/edit/delete), use google_drive_create_file, google_drive_create_folder, google_drive_update_file, and google_drive_delete_file.
 - Google Calendar: Use google_calendar_list when the user mentions meetings, schedule, appointments, or asks about their day/week. Set days=1 for today, days=7 for this week, days=30 for this month.
 - For Calendar modifications (create/edit/delete), use google_calendar_create_event, google_calendar_update_event, and google_calendar_delete_event.
 - Gmail: Use gmail_inbox_read when the user asks to read inbox content. Use gmail_read_unread for unread-focused requests.
