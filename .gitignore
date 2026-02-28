@@ -7,3 +7,4 @@ uploads/
 .github
 firebase-service-account.json
 .vercel
+.claude

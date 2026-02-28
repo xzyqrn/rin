@@ -9,15 +9,13 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
-- [Setup](#setup)
-- [Running on a VPS (Production)](#running-on-a-vps-production)
-- [Reverse Proxy & HTTPS](#reverse-proxy--https)
 - [Tools](#tools)
 - [Commands](#commands)
 - [Usage Examples](#usage-examples)
 - [Background Services](#background-services)
 - [Database](#database)
 - [Environment Variables](#environment-variables)
+- [Errors](#errors)
 - [Security Notes](#security-notes)
 - [License](#license)
 
@@ -25,14 +23,15 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 
 ## Features
 
-- **Persistent memory** — conversation history and extracted user facts are stored in SQLite and injected into every prompt, so Rin remembers you across restarts
+- **Persistent memory** — conversation history and extracted user facts are stored in Firestore and injected into every prompt, so Rin remembers you across restarts
 - **Per-user isolation** — every Telegram user has their own private memory, notes, reminders, and storage
 - **Multi-user support** — any number of users can chat simultaneously
 - **Tool-calling** — Rin uses OpenAI-compatible function calling to act, not just talk
 - **Graceful fallback** — if the model doesn't support tool calling, Rin falls back to plain chat seamlessly
 - **File uploads** — send any document, photo, video, audio, or voice message; files are saved to the VPS under a per-user folder with configurable size and quota limits
 - **Rate limiting** — configurable per-hour message cap for non-admin users
-- **API usage tracking** — every LLM call logs token counts to SQLite
+- **API usage tracking** — every LLM call logs token counts to Firestore
+- **Google Integration** — link your Google account to interact with Drive, Calendar, Gmail, and more
 
 ---
 
@@ -42,8 +41,8 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 |-----------|-------------------|
 | Runtime | Node.js v18+ |
 | Telegram API | [telegraf](https://github.com/telegraf/telegraf) v4 |
-| Database | [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) |
-| LLM Provider | [OpenRouter](https://openrouter.ai) |
+| Database | [Firebase Firestore](https://firebase.google.com/docs/firestore) |
+| LLM Provider | [OpenRouter](https://openrouter.ai) or [Google Gemini](https://ai.google.dev/) |
 | Model | `arcee-ai/trinity-large-preview:free` (configurable via `LLM_MODEL`) |
 | Web scraping | axios + cheerio |
 | Scheduling | node-cron |
@@ -57,14 +56,14 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 ├── src/
 │   ├── index.js                Entry point — env check, DB init, wires everything together
 │   ├── bot.js                  Telegraf setup, commands, rate limiting, message handler
-│   ├── database.js             SQLite schema, migrations, all DB helpers
-│   ├── llm.js                  OpenRouter client, tool-call loop, usage tracking, fact extraction
+│   ├── database.js             Firestore schema and all DB helpers
+│   ├── llm.js                  LLM client, tool-call loop, usage tracking, fact extraction
 │   ├── personality.js          Rin's system prompts (base + admin)
 │   ├── logger.js               Structured logging helper
 │   ├── shell.js                Safe shell execution (timeout, output cap, denylist)
 │   ├── tools.js                All tool definitions + executor dispatcher
 │   ├── poller.js               Background loops — reminders + health checks
-│   ├── webhook.js              Express webhook server
+│   ├── webhook.js              Express webhook server for callbacks and triggers
 │   └── capabilities/
 │       ├── web.js              browseUrl, checkUrl
 │       ├── files.js            readFile, writeFile, listDirectory, deleteFile, convertFile
@@ -72,120 +71,10 @@ A personal Telegram bot powered by [Trinity](https://openrouter.ai/arcee-ai/trin
 │       ├── monitoring.js       system health, PM2 status, API usage
 │       ├── storage.js          per-user key-value store
 │       └── uploads.js          Telegram file download, per-user quota enforcement
-├── data/                       SQLite database (auto-created, git-ignored)
+├── uploads/                    User files (git-ignored)
 ├── .env.example
 └── package.json
 ```
-
----
-
-## Setup
-
-### 1. Prerequisites
-
-- Node.js v18 or later
-- A Telegram bot token from [@BotFather](https://t.me/BotFather)
-- An OpenRouter API key from [openrouter.ai/keys](https://openrouter.ai/keys)
-- Your Telegram user ID — message [@userinfobot](https://t.me/userinfobot) to get it
-
-### 2. Clone and install
-
-```bash
-git clone <your-repo-url>
-cd Rin
-npm install
-```
-
-### 3. Configure environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your values (see [Environment Variables](#environment-variables) below).
-
-### 4. Run
-
-```bash
-npm start
-```
-
-Expected output:
-
-```
-[db] SQLite initialized.
-[bot] Rin is online.
-[poller] Reminder + health-check pollers started.
-[cron] 0 job(s) loaded.
-[webhook] Server listening on port 3000
-```
-
----
-
-## Running on a VPS (Production)
-
-Run Rin under [PM2](https://pm2.keymetrics.io/) so it survives crashes and reboots.
-
-```bash
-npm install -g pm2
-pm2 start src/index.js --name rin
-pm2 save
-pm2 startup    # follow the printed command to enable autostart
-```
-
-Common PM2 commands:
-
-```bash
-pm2 logs rin        # live log tail
-pm2 restart rin     # restart
-pm2 stop rin        # stop
-pm2 status          # overview of all processes
-```
-
-### Updating the Bot
-
-When running in production, Rin does not automatically update itself. To fetch the latest changes from the repository and apply them:
-
-```bash
-cd /path/to/Rin
-git pull
-npm install
-pm2 restart rin
-```
-
----
-
-## Reverse Proxy & HTTPS
-
-The webhook HTTP server runs on plain HTTP and must be fronted by a reverse proxy with TLS in production. Below are minimal config snippets for the two most common options. After configuring either, set `WEBHOOK_BASE_URL=https://yourdomain.com` in `.env`.
-
-### nginx
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name yourdomain.com;
-
-    ssl_certificate     /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
-
-    location / {
-        proxy_pass         http://127.0.0.1:3000;
-        proxy_set_header   Host $host;
-        proxy_set_header   X-Real-IP $remote_addr;
-    }
-}
-```
-
-### Caddy
-
-```caddyfile
-yourdomain.com {
-    reverse_proxy localhost:3000
-}
-```
-
-Caddy handles TLS certificates automatically.
 
 ---
 
@@ -241,12 +130,10 @@ Rin uses function calling to take real actions. Tools are split by access level.
 | `/start` | Everyone | Introduction message |
 | `/help` | Everyone | List available commands and capabilities |
 | `/myfiles` | Everyone | List your uploaded files |
+| `/linkgoogle` | Everyone | Start Google OAuth account linking process |
 | `/cancel` | Everyone | Cancel an ongoing LLM request |
 | `/shell <cmd>` | Admins | Execute a shell command directly, bypassing the LLM |
 | `/status` | Admins | Quick system health snapshot (CPU, memory, disk, uptime) |
-
-> **Note:** Admin commands are restricted to the Telegram user IDs set in `ADMIN_USER_ID`. Any other user will receive a permission-denied reply.
-
 
 ---
 
@@ -264,41 +151,19 @@ You:  Hey, do you remember me?
 Rin:  You're Jay, a backend engineer. What's up?
 ```
 
-### Cancelling a request
-
-```
-You:  Write me a detailed essay about the history of the Roman Empire.
-Rin:  [thinking…]
-
-You:  /cancel
-Rin:  Cancelled the current request.
-```
-
 ### Reminders
 
 ```
 You:  Remind me to push the deployment in 30 minutes.
-Rin:  Done. Reminder #4 set for 3:45 PM: "push the deployment"
+Rin:  Done. Reminder #id set for 3:45 PM: "push the deployment"
 
 # 30 minutes later, Rin messages you:
 Rin:  Reminder: push the deployment
 ```
 
-### Notes & storage
-
-```
-You:  Save a note called "Deploy checklist" — run migrations, restart workers, clear cache
-Rin:  Note "Deploy checklist" saved.
-
-You:  What's in my deploy checklist?
-Rin:  [Deploy checklist] run migrations, restart workers, clear cache
-```
-
 ### File uploads
 
 Just send Rin any file directly in the Telegram chat — no command required.
-
-Supported types:
 
 | What you send | How Telegram forwards it |
 |---------------|--------------------------|
@@ -309,77 +174,11 @@ Supported types:
 | Voice message | Voice (saved as `voice_message.ogg`) |
 | Circle video | Video note (saved as `video_note.mp4`) |
 
-```
-You:  [sends project.zip]
-Rin:  📥 Receiving your file…
-      ✅ Saved! `project_1719000000000.zip` (1.23 MB) is in your folder on the VPS.
-      Use /myfiles to see everything you've uploaded.
-
-You:  /myfiles
-Rin:  📁 Your uploads (3 files):
-      1. project_1719000000000.zip (1.23 MB) — 6/21/2024, 12:00:00 PM
-      2. screenshot_1718900000000.jpg (245.00 KB) — 6/20/2024, 8:00:00 AM
-      3. notes_1718800000000.txt (4.1 KB) — 6/19/2024, 9:30:00 PM
-```
-
-Files are stored at `<UPLOADS_DIR>/<userId>/` on the VPS. Admins can access them via `read_file` / `list_directory` tools.
-
-### Web browsing
-
-```
-You:  Summarise the Node.js 22 release notes
-Rin:  [fetches nodejs.org] Here's a summary: ...
-```
-
-### VPS control (admins)
-
-```
-You:  How's the server doing?
-Rin:  [runs system_health] Memory: 1.4 GB / 4.0 GB used (35%)
-      Load: 0.12 / 0.15 / 0.11 — Uptime: 12d 4h 21m — Disk: 18G / 50G (36%)
-
-You:  Is nginx running?
-Rin:  [runs systemctl status nginx] Yes, active and running. No errors.
-
-You:  Tail the app log
-Rin:  [runs tail -n 30 /var/log/app.log] Here's what I see: ...
-```
-
-For direct execution without LLM interpretation:
-
-```
-/shell journalctl -n 50 --no-pager
-/shell df -h && free -m
-/shell ps aux --sort=-%mem | head -10
-/status
-```
-
-### Cron jobs (admins)
-
-```
-You:  Send me a good morning message every day at 8am UTC
-Rin:  [calls create_cron] Job "good-morning" created — runs at "0 8 * * *"
-
-You:  Check if my API is up every 5 minutes and alert me if it goes down
-Rin:  [calls add_health_check] Health check "api" added for https://myapi.com/health
-```
-
-### Webhooks (admins)
-
-```
-You:  Create a webhook called "github-push"
-Rin:  Webhook "github-push" created.
-      URL: https://yourserver.com/webhook/a3f9bc...
-      POST JSON to that URL and it will appear here.
-```
-
-Configure it in GitHub → Settings → Webhooks, and you'll receive push notifications directly in Telegram.
-
 ---
 
 ## Background Services
 
-Three background processes run continuously after `npm start`:
+Three background processes run continuously:
 
 | Service | Interval | What it does |
 |---------|----------|-------------|
@@ -391,68 +190,82 @@ Three background processes run continuously after `npm start`:
 
 ## Database
 
-The SQLite database lives at `data/rin.db` and is created automatically.
+Rin uses **Google Cloud Firestore** for storage.
 
-### Tables
+### Collections
 
-| Table | Purpose |
-|-------|---------|
-| `memory` | Per-user conversation history (last 20 turns used as context) |
-| `user_facts` | Durable facts extracted from conversations (name, job, etc.) |
-| `reminders` | Scheduled reminder messages |
-| `notes` | User notes keyed by title |
-| `storage` | Arbitrary key-value pairs per user |
+| Collection | Purpose |
+|------------|---------|
+| `users/{id}/memory` | Per-user conversation history |
+| `users/{id}/facts` | Durable facts extracted from conversations |
+| `users/{id}/notes` | User notes keyed by base64 titles |
+| `users/{id}/storage` | Arbitrary key-value pairs |
+| `users/{id}/google_auth` | OAuth tokens for Google integration |
+| `reminders` | Scheduled reminders with `fire_at` timestamps |
 | `cron_jobs` | Recurring scheduled jobs |
 | `health_checks` | URLs being monitored for uptime |
-| `api_metrics` | LLM call log with token counts |
-| `rate_limits` | Per-user per-hour message counts |
+| `api_metrics` | LLM usage logs (tokens_in, tokens_out) |
 | `webhooks` | Registered webhook endpoints and tokens |
-
-### Inspecting the database
-
-```bash
-sqlite3 data/rin.db
-
-sqlite> SELECT * FROM user_facts WHERE user_id = 123456789;
-sqlite> SELECT content, timestamp FROM memory WHERE user_id = 123456789 ORDER BY id DESC LIMIT 10;
-sqlite> SELECT * FROM reminders ORDER BY fire_at;
-sqlite> SELECT model, SUM(tokens_in + tokens_out) as total FROM api_metrics GROUP BY model;
-```
 
 ---
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | — | Bot token from @BotFather |
-| `OPENROUTER_API_KEY` | Yes | — | API key from openrouter.ai |
-| `ADMIN_USER_ID` | Recommended | — | Comma-separated Telegram user IDs with full access |
-| `LLM_MODEL` | No | `arcee-ai/trinity-large-preview:free` | OpenRouter model identifier |
-| `RATE_LIMIT_PER_HOUR` | No | `60` | Max messages per hour for non-admin users |
-| `MEMORY_TURNS` | No | `20` | Number of conversation turns to include as context |
-| `WEBHOOK_PORT` | No | `3000` | Port for the webhook HTTP server |
-| `WEBHOOK_BASE_URL` | No | — | Public base URL for webhook links (e.g. `https://yourdomain.com`). Must use HTTPS in production via a reverse proxy with TLS. |
-| `ENABLE_WEBHOOKS` | No | `true` | Set to `false` to disable the webhook server entirely |
-| `UPLOADS_DIR` | No | `./uploads` | Directory where user-uploaded files are stored |
-| `MAX_UPLOAD_MB` | No | `50` | Maximum single file upload size in MB |
-| `MAX_USER_QUOTA_MB` | No | `500` | Maximum total storage per user in MB |
-| `SHELL_DENYLIST` | No | `rm -rf /,mkfs,dd if=` | Comma-separated shell command patterns to block |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | **Yes** | Bot token from @BotFather |
+| `GEMINI_API_KEY` | **Yes*** | Google Gemini API Key |
+| `OPENROUTER_API_KEY` | **Yes*** | API key from openrouter.ai (Alternative to Gemini) |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | **Yes** | Your Firebase service account credentials (JSON string) |
+| `ADMIN_USER_ID` | Recommended | Comma-separated Telegram user IDs with full access |
+| `LLM_MODEL` | No | model identifier (e.g. `arcee-ai/trinity-large-preview:free`) |
+| `WEBHOOK_BASE_URL` | No | Public base URL for OAuth/webhook links (e.g. `https://yourdomain.com`) |
+| `TIMEZONE` | No | TZ string (e.g. `Asia/Manila`) |
+| `RATE_LIMIT_PER_HOUR` | No | Max messages per hour for non-admin users (default: 60) |
+| `MAX_UPLOAD_MB` | No | Maximum single file upload size (default: 50MB) |
+| `MAX_USER_QUOTA_MB` | No | Maximum total storage per user (default: 500MB) |
+
+*\*Either `GEMINI_API_KEY` or `OPENROUTER_API_KEY` must be provided.*
+
+---
+
+## Errors
+
+### Bot Startup & Connectivity
+- **`[error] TELEGRAM_BOT_TOKEN is not set.`**: The bot cannot start because the Telegram token is missing from the `.env` file.
+- **`[error] GEMINI_API_KEY or OPENROUTER_API_KEY is not set.`**: No LLM provider key found. One of these must be configured.
+- **`[bot] 409 Conflict`**: Another instance of the bot is already running. Stop other processes (PM2 or terminals) before starting.
+- **`[bot] Failed to set commands`**: Usually a network error or invalid token preventing synchronization with Telegram's servers.
+
+### Database (Firestore)
+- **`[firebase] Failed to initialize Firebase`**: The service account JSON is invalid or missing required fields (`private_key`, etc.).
+- **`[firebase] No FIREBASE_SERVICE_ACCOUNT_JSON in .env...`**: Firestore-dependent features (memory, reminders) will be disabled.
+- **`[firebase] Rate limit transaction failed`**: A database collision occurred while updating message counts. The system usually "fails open" to allow the message through.
+
+### File Uploads & Storage
+- **`File too large`**: The file exceeds the `MAX_UPLOAD_MB` limit (default 50MB).
+- **`Upload would exceed your storage quota`**: The user has reached their total storage limit (default 500MB).
+- **`Telegram getFile returned not-ok`**: Telegram's servers rejected the file metadata request, often due to a large file (>20MB) or expired link.
+- **`HTTP 404 while downloading file`**: The file was cleaned up from Telegram's servers before Rin could download it.
+
+### Tool & Execution Errors
+- **`Tool error: <sanitized message>`**: An internal tool (like `read_file` or `run_command`) failed. RIN sanitizes these to prevent leaking server paths or stack traces.
+- **`Tool calling not supported, falling back to plain chat`**: The selected `LLM_MODEL` does not support function calling. Rin will continue as a standard chat bot.
+- **`User rate limit reached`**: You have sent too many messages in the last hour.
+
+### Webhooks & Google Auth
+- **`Auth error: <error>`**: The Google OAuth process was cancelled or failed on Google's side.
+- **`Rate limit exceeded. Max 60 requests/minute per webhook.`**: A specific webhook URL is being flooded with requests.
 
 ---
 
 ## Security Notes
 
-- All admin tools — shell, files, cron, monitoring, webhooks — are gated by `ADMIN_USER_ID`. Non-matching users cannot trigger them.
-- Shell commands are checked against a configurable denylist (`SHELL_DENYLIST`) before execution, and all invocations are logged.
-- Run the bot under a dedicated low-privilege OS user, never as root.
-- Shell commands time out after 30 seconds; output is capped at 3 500 characters.
-- `browse_url` blocks requests to private/loopback addresses (SSRF protection).
-- Webhook tokens are 48-character hex secrets generated with `crypto.randomBytes`.
-- The webhook server runs on plain HTTP; a reverse proxy with TLS (nginx, caddy) is required in production.
-- File uploads are capped at `MAX_UPLOAD_MB` (default 50 MB) per file and `MAX_USER_QUOTA_MB` (default 500 MB) per user.
-- Tool errors are sanitized to strip absolute paths and stack traces before being shown to the LLM.
-- The `data/` directory and `.env` are git-ignored.
+- **Admin Gating**: All destructive tools (shell, files, cron, monitoring, webhooks) are gated by `ADMIN_USER_ID`.
+- **Shell Sandboxing**: Commands are checked against a configured `SHELL_DENYLIST` (blocking `rm -rf /`, `mkfs`, etc.).
+- **SSRF Protection**: `browse_url` blocks requests to private/loopback IP addresses.
+- **Sanitized Errors**: Tool errors are stripped of absolute paths and stack traces before being shown to the LLM or user.
+- **Payload Limits**: Inbound webhooks are capped at 1MB to prevent memory exhaustion.
 
 ---
 
