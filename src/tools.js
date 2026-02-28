@@ -546,7 +546,7 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
     return resolvedPath;
   }
 
-  const keys = admin ? [...ALL_USER_KEYS, ...ADMIN_KEYS] : ALL_USER_KEYS;
+  const keys = admin ? [...ADMIN_KEYS, ...ALL_USER_KEYS] : ALL_USER_KEYS;
   const definitions = keys.map((k) => DEF[k]);
 
   async function executor(toolName, args) {
