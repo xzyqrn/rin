@@ -45,9 +45,10 @@ function _rowToMessage(row) {
  * - If there are older turns above COMPRESS_THRESHOLD, compresses them into a
  *   single summary message (summarized asynchronously on first need).
  * @param {Array} memories - all stored memory rows (newest last)
+ * @param {AbortSignal} [signal] - optional abort signal for /cancel during summarization
  * @returns {Promise<Array>} resolved message array
  */
-async function buildMessageHistory(memories) {
+async function buildMessageHistory(memories, signal) {
   if (memories.length <= RECENT_TURNS) {
     return memories.map(_rowToMessage);
   }
@@ -63,7 +64,7 @@ async function buildMessageHistory(memories) {
 
   // Compress older turns into a summary
   const olderMessages = olderRows.map(_rowToMessage);
-  const summary = await summarizeHistory(olderMessages);
+  const summary = await summarizeHistory(olderMessages, signal);
   const summaryMessage = {
     role: 'assistant',
     content: `[Memory summary of earlier conversation]\n${summary}`,
@@ -267,7 +268,7 @@ function createBot(db, { webhookRef = null } = {}) {
       const memories = getRecentMemories(db, userId, MEMORY_TURNS);
 
       // Build history (may include a compressed summary of older turns)
-      const historyMessages = await buildMessageHistory(memories);
+      const historyMessages = await buildMessageHistory(memories, controller.signal);
 
       // Inject a planning nudge for complex multi-step requests
       let systemContent = buildSystemMessage(facts, admin);

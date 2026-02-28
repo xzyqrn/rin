@@ -292,14 +292,21 @@ function getApiUsageSummary(db, days = 7) {
 
 function checkAndIncrementRateLimit(db, userId, limitPerHour) {
   const windowStart = Math.floor(Date.now() / 3600000) * 3600;
-  const row = db.prepare('SELECT count FROM rate_limits WHERE user_id = ? AND window_start = ?')
-    .get(userId, windowStart);
-  if (row && row.count >= limitPerHour) return false;
-  db.prepare(`
+  // Atomic: only increment if currently under limit (or no row yet)
+  const upd = db.prepare(`
+    UPDATE rate_limits SET count = count + 1
+    WHERE user_id = ? AND window_start = ? AND count < ?
+  `).run(userId, windowStart, limitPerHour);
+  if (upd.changes === 1) {
+    return true;
+  }
+  // No row or at/over limit — ensure row exists for this window, then allow only if we inserted (first message)
+  const ins = db.prepare(`
     INSERT INTO rate_limits (user_id, window_start, count) VALUES (?, ?, 1)
-    ON CONFLICT(user_id, window_start) DO UPDATE SET count = count + 1
+    ON CONFLICT(user_id, window_start) DO NOTHING
   `).run(userId, windowStart);
-  return true;
+  const allowed = ins.changes === 1;
+  return allowed;
 }
 
 module.exports = {

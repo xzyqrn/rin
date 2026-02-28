@@ -27,17 +27,26 @@ initLlm(db);
 const webhookRef = { current: null };
 const bot = createBot(db, { webhookRef });
 
+// Start reminder + health-check pollers immediately so they run even before launch() resolves
+startPollers(db, bot.telegram);
+console.log('[poller] Reminder + health-check pollers started.');
+
 bot.launch().then(() => {
   console.log('[bot] Rin is online.');
-
-  startPollers(db, bot.telegram);
-  console.log('[poller] Reminder + health-check pollers started.');
 
   initCron(db, bot.telegram);
 
   if (process.env.ENABLE_WEBHOOKS !== 'false') {
     webhookRef.current = startWebhookServer(db, bot.telegram);
   }
+}).catch((err) => {
+  const is409 = err?.response?.error_code === 409 || /409|getUpdates|Conflict/i.test(err?.message || '');
+  if (is409) {
+    console.error('[bot] 409 Conflict: Another process is already polling for this bot. Stop the other instance (e.g. other terminal or PM2) and try again.');
+  } else {
+    console.error('[bot] Launch failed:', err.message || err);
+  }
+  process.exit(1);
 });
 
 // ── Graceful shutdown ──────────────────────────────────────────────────────────

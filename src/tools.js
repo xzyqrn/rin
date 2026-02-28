@@ -644,7 +644,7 @@ function buildTools(db, userId, { admin = false, webhookService = null } = {}) {
       case 'delete_file':
         try { return deleteFile(getSafePath(args.path)); } catch (e) { return e.message; }
       case 'convert_file':
-        return convertFile(args.path, args.format);
+        try { return convertFile(getSafePath(args.path), args.format); } catch (e) { return e.message; }
 
       // ── Monitoring ────────────────────────────────────────────────────────
       case 'system_health': return await getSystemHealth();
