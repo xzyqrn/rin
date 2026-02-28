@@ -10,7 +10,7 @@ const MAX_CONTENT_CHARS = 4000;
 function isPrivateHost(urlStr) {
   try {
     const host = new URL(urlStr).hostname;
-    return /^(localhost|127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|::1$)/i.test(host);
+    return /^(localhost|127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0|\[::1\]|\[::\]|\[fc[0-9a-f]{2}:|\[fd[0-9a-f]{2}:)/i.test(host);
   } catch {
     return true;
   }
@@ -57,6 +57,10 @@ async function browseUrl(url) {
 }
 
 async function checkUrl(url) {
+  if (isPrivateHost(url)) {
+    return { url, ok: false, status: -1, error: 'Access to private/local addresses is not allowed.' };
+  }
+
   try {
     const start = Date.now();
     const response = await axios.get(url, {
