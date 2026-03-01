@@ -5,6 +5,7 @@ const { SYSTEM_PROMPT, ADMIN_SYSTEM_PROMPT } = require('./personality');
 const { chat, chatWithTools, summarizeHistory, extractFacts } = require('./llm');
 const { buildTools } = require('./tools');
 const { runCommand } = require('./shell');
+const { splitAssistantReply } = require('./reply-splitter');
 const { checkAndIncrementRateLimit,
   saveMemory, getRecentMemories,
   upsertFact, getAllFacts, storageGet, getGoogleTokens } = require('./database');
@@ -117,17 +118,9 @@ function isMultiStepRequest(text) {
 
 async function sendLong(ctx, text) {
   const safeText = sanitizeAssistantReply(text);
-  const LIMIT = 4096;
-  if (safeText.length <= LIMIT) { await ctx.reply(safeText); return; }
-  let start = 0;
-  while (start < safeText.length) {
-    let end = start + LIMIT;
-    if (end < safeText.length) {
-      const lastNewline = safeText.lastIndexOf('\n', end);
-      if (lastNewline > start) end = lastNewline;
-    }
-    await ctx.reply(safeText.slice(start, end));
-    start = end;
+  const chunks = splitAssistantReply(safeText);
+  for (const chunk of chunks) {
+    await ctx.reply(chunk);
   }
 }
 
