@@ -149,6 +149,15 @@ function sanitizeAssistantReply(text) {
     out = next;
   }
 
+  if (
+    out.trimStart().startsWith('tool_code') ||
+    /^print\s*\(\s*default_api\./i.test(out) ||
+    /^call\b[\s\S]{0,80}\n\s*print\s*\(\s*default_api\./i.test(out) ||
+    /^call\b[\s\S]{0,120}\bdefault_api\.[a-z0-9_]+\s*\(/i.test(out)
+  ) {
+    return 'I hit an internal tool-formatting issue. Please send that request again.';
+  }
+
   out = out.replace(/\n{3,}/g, '\n\n').trim();
   return out || original.trim();
 }

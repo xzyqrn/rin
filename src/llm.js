@@ -104,9 +104,11 @@ async function chat(messages, { signal } = {}) {
  */
 function _looksLikeToolCodeLeak(text) {
   if (!text) return false;
-  const trimmed = text.trimStart();
+  const trimmed = text.replace(/\r\n/g, '\n').trimStart();
   if (trimmed.startsWith('tool_code')) return true;
   if (/^print\s*\(\s*default_api\./i.test(trimmed)) return true;
+  if (/^call\b[\s\S]{0,80}\n\s*print\s*\(\s*default_api\./i.test(trimmed)) return true;
+  if (/^call\b[\s\S]{0,120}\bdefault_api\.[a-z0-9_]+\s*\(/i.test(trimmed)) return true;
   return false;
 }
 
@@ -291,6 +293,7 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
   let verificationPassDone = false;
   let capabilityCorrectionUsed = false;
   let googleCapabilitiesChecked = false;
+  let toolCodeRepairNudgeUsed = false;
   const routedModel = _selectModel(messages, toolDefs);
 
   try {
@@ -315,14 +318,6 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
         // If Rin produced a plan but the reply is empty, summarise what was done
         const content = (msg.content || '').trim();
 
-        // Guard against models that emit raw "tool_code" blocks instead of
-        // using structured tool_calls. In that case, fall back to a plain
-        // chat without tools so the user never sees the internal code.
-        if (_looksLikeToolCodeLeak(content)) {
-          console.warn('[llm] Detected raw tool_code block; falling back to plain chat without tools.');
-          return await chat(messages, { signal });
-        }
-
         if (!groundingNudgeUsed && shouldForceToolGrounding && externalToolCalls === 0) {
           groundingNudgeUsed = true;
           _logGuardEvent('tool_grounding_nudge', { reason: 'forced_tool_grounding' });
@@ -335,6 +330,27 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
               'If access is unavailable, call google_auth_status and google_scope_status, then include the exact relink URL.',
           });
           continue;
+        }
+
+        // Guard against models that emit internal tool syntax in plain text
+        // instead of structured tool_calls (e.g. "call\nprint(default_api...)").
+        // First try a repair nudge; if it still leaks, fall back to plain chat.
+        if (_looksLikeToolCodeLeak(content)) {
+          if (!toolCodeRepairNudgeUsed) {
+            toolCodeRepairNudgeUsed = true;
+            _logGuardEvent('tool_code_repair_nudge', { reason: 'raw_tool_syntax_in_assistant_content' });
+            current.push(msg);
+            current.push({
+              role: 'user',
+              content:
+                'Your previous message exposed internal tool syntax. ' +
+                'Do not output tool_code, call, print(default_api...), or any internal function syntax. ' +
+                'Use proper structured tool calls if needed, then reply with a normal user-facing answer only.',
+            });
+            continue;
+          }
+          console.warn('[llm] Detected raw tool syntax after repair nudge; falling back to plain chat without tools.');
+          return await chat(messages, { signal });
         }
 
         if (
