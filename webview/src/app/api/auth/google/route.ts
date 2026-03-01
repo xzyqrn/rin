@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthUrl } from '@/lib/google';
+import { verifySignedOAuthState } from '@/lib/oauth-state';
 
 export async function GET(request: Request) {
     const url = new URL(request.url);
@@ -11,13 +12,23 @@ export async function GET(request: Request) {
         return new NextResponse('Missing user state', { status: 400 });
     }
 
+    const stateCheck = verifySignedOAuthState(state);
+    if (!stateCheck.ok) {
+        console.error('[Google Auth] Invalid OAuth state:', stateCheck.error);
+        const isConfigError = /not configured/i.test(stateCheck.error);
+        return new NextResponse(
+            isConfigError ? 'OAuth state verification is not configured on the server.' : 'Invalid or expired OAuth state. Please run /linkgoogle again.',
+            { status: isConfigError ? 500 : 400 }
+        );
+    }
+
     try {
         const authUrl = getAuthUrl(state, url.origin);
         return NextResponse.redirect(authUrl);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-        console.error('[Google Auth] Setup incomplete:', error.message);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        console.error('[Google Auth] Setup incomplete:', message);
         console.error('[Google Auth] Error details:', error);
-        return new NextResponse(`Setup incomplete: ${error.message}`, { status: 500 });
+        return new NextResponse(`Setup incomplete: ${message}`, { status: 500 });
     }
 }

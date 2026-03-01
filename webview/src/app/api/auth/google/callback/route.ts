@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google';
 import { db } from '@/lib/firebase';
+import { verifySignedOAuthState } from '@/lib/oauth-state';
 import * as admin from 'firebase-admin';
 
 export async function GET(request: Request) {
@@ -19,6 +20,16 @@ export async function GET(request: Request) {
         return new NextResponse('Missing code or state', { status: 400 });
     }
 
+    const stateCheck = verifySignedOAuthState(state);
+    if (!stateCheck.ok) {
+        console.error('[Google Callback] Invalid OAuth state:', stateCheck.error);
+        const isConfigError = /not configured/i.test(stateCheck.error);
+        return new NextResponse(
+            isConfigError ? 'OAuth state verification is not configured on the server.' : 'Invalid or expired OAuth state. Please run /linkgoogle again.',
+            { status: isConfigError ? 500 : 400 }
+        );
+    }
+
     try {
         const oauth2Client = getOAuth2Client(url.origin);
         const { tokens } = await oauth2Client.getToken(code);
@@ -28,7 +39,7 @@ export async function GET(request: Request) {
             return new NextResponse('Database not configured', { status: 500 });
         }
 
-        const docRef = db.collection('users').doc(String(state)).collection('google_auth').doc('tokens');
+        const docRef = db.collection('users').doc(stateCheck.userId).collection('google_auth').doc('tokens');
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const updateData: any = {
             updated_at: admin.firestore.FieldValue.serverTimestamp()

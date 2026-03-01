@@ -20,6 +20,9 @@ if (!process.env.TELEGRAM_BOT_TOKEN) {
 if (!process.env.GEMINI_API_KEY && !process.env.OPENROUTER_API_KEY) {
   console.error('[error] GEMINI_API_KEY or OPENROUTER_API_KEY is not set.'); process.exit(1);
 }
+if ((process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL) && !process.env.GOOGLE_OAUTH_STATE_SECRET) {
+  console.warn('[warn] GOOGLE_OAUTH_STATE_SECRET is not set. /linkgoogle will fail until this is configured.');
+}
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 const db = initDb();

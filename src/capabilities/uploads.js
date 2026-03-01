@@ -149,43 +149,35 @@ function fmtSize(bytes) {
  * @returns {Promise<void>}
  */
 async function sendTelegramFile(botToken, chatId, filePath, caption) {
-  const fileName = path.basename(filePath);
+  const fileName = path.basename(filePath).replace(/"/g, '_');
 
   // Build multipart/form-data manually (no external deps needed)
   const boundary = `----BotBoundary${Date.now()}`;
   const CRLF = '\r\n';
 
-  // We'll collect the body parts as Buffers
-  const parts = [];
-
-  // chat_id field
-  parts.push(Buffer.from(
+  const chatField = Buffer.from(
     `--${boundary}${CRLF}` +
     `Content-Disposition: form-data; name="chat_id"${CRLF}${CRLF}` +
     `${chatId}${CRLF}`
-  ));
+  );
 
-  // caption field (optional)
+  let captionField = Buffer.alloc(0);
   if (caption) {
-    parts.push(Buffer.from(
+    captionField = Buffer.from(
       `--${boundary}${CRLF}` +
       `Content-Disposition: form-data; name="caption"${CRLF}${CRLF}` +
       `${caption}${CRLF}`
-    ));
+    );
   }
 
-  // document field header (the file data is streamed after)
   const docHeader = Buffer.from(
     `--${boundary}${CRLF}` +
     `Content-Disposition: form-data; name="document"; filename="${fileName}"${CRLF}` +
     `Content-Type: application/octet-stream${CRLF}${CRLF}`
   );
   const closing = Buffer.from(`${CRLF}--${boundary}--${CRLF}`);
-
-  // Read the file into a Buffer so we can compute Content-Length
-  const fileBuffer = fs.readFileSync(filePath);
-
-  const body = Buffer.concat([...parts, docHeader, fileBuffer, closing]);
+  const fileStats = fs.statSync(filePath);
+  const contentLength = chatField.length + captionField.length + docHeader.length + fileStats.size + closing.length;
 
   await new Promise((resolve, reject) => {
     const options = {
@@ -194,7 +186,7 @@ async function sendTelegramFile(botToken, chatId, filePath, caption) {
       method: 'POST',
       headers: {
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Content-Length': body.length,
+        'Content-Length': contentLength,
       },
     };
 
@@ -216,8 +208,17 @@ async function sendTelegramFile(botToken, chatId, filePath, caption) {
     });
 
     req.on('error', reject);
-    req.write(body);
-    req.end();
+    req.write(chatField);
+    if (captionField.length) req.write(captionField);
+    req.write(docHeader);
+
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', (err) => req.destroy(err));
+    stream.on('end', () => {
+      req.write(closing);
+      req.end();
+    });
+    stream.pipe(req, { end: false });
   });
 }
 

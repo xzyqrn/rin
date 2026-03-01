@@ -5,6 +5,7 @@ const { SYSTEM_PROMPT, ADMIN_SYSTEM_PROMPT } = require('./personality');
 const { chat, chatWithTools, summarizeHistory, extractFacts } = require('./llm');
 const { buildTools } = require('./tools');
 const { runCommand } = require('./shell');
+const { createSignedOAuthState } = require('./oauth-state');
 const { splitAssistantReply } = require('./reply-splitter');
 const { checkAndIncrementRateLimit,
   saveMemory, getRecentMemories,
@@ -234,7 +235,16 @@ function createBot(db, { webhookRef = null } = {}) {
     if (!oauthBase) {
       return ctx.reply('GOOGLE_OAUTH_BASE_URL is not configured. Ask the administrator to set it up.');
     }
-    const authUrl = `${oauthBase}/api/auth/google?state=${encodeURIComponent(String(userId))}`;
+
+    let signedState;
+    try {
+      signedState = createSignedOAuthState(userId);
+    } catch (err) {
+      console.error('[oauth] Failed to sign Google OAuth state:', err.message || err);
+      return ctx.reply('Google OAuth is not fully configured. Ask the administrator to set GOOGLE_OAUTH_STATE_SECRET.');
+    }
+
+    const authUrl = `${oauthBase}/api/auth/google?state=${encodeURIComponent(signedState)}`;
     return ctx.reply('🔗 Click the button below to securely link your Google account to Rin.', {
       reply_markup: {
         inline_keyboard: [[

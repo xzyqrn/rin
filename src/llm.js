@@ -5,6 +5,8 @@ const OpenAI = require('openai');
 const MODEL = process.env.LLM_MODEL || 'gemini-2.5-flash-lite';
 const COMPLEX_MODEL = process.env.LLM_MODEL_COMPLEX || MODEL;
 const MODEL_ROUTER_ENABLED = /^(1|true|yes)$/i.test(String(process.env.MODEL_ROUTER_ENABLED || ''));
+const DEBUG_LLM_PAYLOAD = /^(1|true|yes)$/i.test(String(process.env.DEBUG_LLM_PAYLOAD || ''));
+const DEBUG_LLM_PAYLOAD_PATH = process.env.DEBUG_LLM_PAYLOAD_PATH || '/tmp/llm_payload.json';
 
 const useGeminiNative = !!process.env.GEMINI_API_KEY;
 
@@ -295,10 +297,16 @@ async function chatWithTools(messages, toolDefs, executor, { signal } = {}) {
 
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      // DEBUG LOGGING
-      try {
-        require('fs').writeFileSync('/tmp/llm_payload.json', JSON.stringify({ model: routedModel, messages: current, tools: (toolDefs || []).length }));
-      } catch (e) { }
+      if (DEBUG_LLM_PAYLOAD) {
+        try {
+          require('fs').writeFileSync(
+            DEBUG_LLM_PAYLOAD_PATH,
+            JSON.stringify({ model: routedModel, messages: current, tools: (toolDefs || []).length })
+          );
+        } catch {
+          // Non-critical debug output.
+        }
+      }
 
       const completion = await _retryCreate({
         model: routedModel,

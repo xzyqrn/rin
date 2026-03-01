@@ -4,7 +4,6 @@ data/
 uploads/
 .cursor
 .Jules
-.github
 firebase-service-account.json
 .vercel
 .claude

@@ -204,6 +204,7 @@ Rin uses **Google Cloud Firestore**.
 | `OPENROUTER_API_KEY` | No | Key for OpenRouter (Alternative) |
 | `ADMIN_USER_ID` | Yes | Your Telegram ID (to enable admin tools) |
 | `GOOGLE_OAUTH_BASE_URL` | Yes** | Canonical webview base URL that serves `/api/auth/google/*` |
+| `GOOGLE_OAUTH_STATE_SECRET` | Yes | Shared secret used by bot+webview to sign and verify OAuth state tokens |
 | `WEBHOOK_BASE_URL` | Yes | Public URL for webhook endpoints only (`/webhook/:token`) |
 | `LLM_MODEL` | No | Model ID (default: `gemini-2.5-flash-lite`) |
 | `MODEL_ROUTER_ENABLED` | No | Enable quality-first model routing (`1` to enable) |
