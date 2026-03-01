@@ -3,6 +3,97 @@ import { getOAuth2Client } from '@/lib/google';
 import { db } from '@/lib/firebase';
 import * as admin from 'firebase-admin';
 
+const SUCCESS_HTML = `
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Success</title>
+          <script src="https://telegram.org/js/telegram-web-app.js"></script>
+          <style>
+            :root {
+              --bg-color: #e6f8fa;
+              --text-color: #333;
+              --success-color: #4caf50;
+              --btn-bg: #0088cc;
+              --btn-hover: #0077b3;
+              --btn-text: #ffffff;
+            }
+            @media (prefers-color-scheme: dark) {
+              :root {
+                --bg-color: #121212;
+                --text-color: #e0e0e0;
+                --success-color: #81c784;
+                --btn-bg: #0277bd;
+                --btn-hover: #01579b;
+              }
+            }
+            body {
+              font-family: system-ui, -apple-system, sans-serif;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              height: 100vh;
+              margin: 0;
+              background-color: var(--bg-color);
+              color: var(--text-color);
+              flex-direction: column;
+              text-align: center;
+              padding: 20px;
+              box-sizing: border-box;
+            }
+            main {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              max-width: 400px;
+            }
+            h2 {
+              color: var(--success-color);
+              margin-bottom: 10px;
+            }
+            p {
+              margin: 5px 0;
+              line-height: 1.5;
+            }
+            button {
+              padding: 10px 20px;
+              font-size: 16px;
+              background-color: var(--btn-bg);
+              color: var(--btn-text);
+              border: none;
+              border-radius: 5px;
+              cursor: pointer;
+              margin-top: 20px;
+              transition: background-color 0.2s, outline 0.2s;
+            }
+            button:hover {
+              background-color: var(--btn-hover);
+            }
+            button:focus-visible {
+              outline: 3px solid var(--btn-bg);
+              outline-offset: 3px;
+            }
+          </style>
+        </head>
+        <body>
+          <main>
+            <h2>✅ Google Account successfully linked!</h2>
+            <p>Your tokens have been saved to the database.</p>
+            <p>You can close this window and return to the bot. This window will close automatically.</p>
+            <button onclick="window.close(); window.Telegram?.WebApp?.close?.();" aria-label="Close this window">Close App</button>
+          </main>
+          <script>
+            setTimeout(() => {
+              window.close();
+              window.Telegram?.WebApp?.close?.();
+            }, 3000);
+          </script>
+        </body>
+      </html>
+    `;
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const { searchParams } = url;
@@ -66,26 +157,7 @@ export async function GET(request: Request) {
 
         // After success, we can redirect back to Telegram or show a success page
         // Using a telegram deep link to close the web app:
-        return new NextResponse(`
-      <html>
-        <head>
-          <title>Success</title>
-          <script src="https://telegram.org/js/telegram-web-app.js"></script>
-        </head>
-        <body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #e6f8fa; flex-direction: column;">
-          <h2 style="color: #4caf50;">✅ Google Account successfully linked!</h2>
-          <p>Your tokens have been saved to the database.</p>
-          <p>You can close this window and return to the bot. This window will close automatically.</p>
-          <button onclick="window.close(); window.Telegram?.WebApp?.close?.();" aria-label="Close this window" style="padding: 10px 20px; font-size: 16px; background: #0088cc; color: white; border: none; border-radius: 5px; cursor: pointer; margin-top: 20px; transition: background 0.2s;" onmouseover="this.style.background='#0077b3'" onmouseout="this.style.background='#0088cc'">Close App</button>
-          <script>
-            setTimeout(() => {
-              window.close();
-              window.Telegram?.WebApp?.close?.();
-            }, 3000);
-          </script>
-        </body>
-      </html>
-    `, {
+        return new NextResponse(SUCCESS_HTML, {
             status: 200,
             headers: { 'Content-Type': 'text/html' }
         });

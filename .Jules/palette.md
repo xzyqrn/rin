@@ -1,7 +1,3 @@
-## 2024-10-24 - Add native command menu to Telegram bot
-**Learning:** In a chat-based UI that lacks standard HTML forms or buttons, users have poor discoverability for available commands. Without an explicit list of commands native to the client, users are forced to memorize them.
-**Action:** Always register a bot's commands with the Telegram platform via `setMyCommands` to populate the native Menu button and enable command auto-complete.
-
-## 2025-03-08 - Replace transient chat status messages with final states
-**Learning:** Sending a "processing" message followed by a separate "done" message creates unnecessary clutter in conversational interfaces, pushing context out of view.
-**Action:** When performing async actions in chat UIs (like file uploads), capture the ID of the initial status message and use the platform's `editMessageText` method to update it with the final outcome instead of appending new messages.
+## 2024-05-18 - Improve accessibility of inline HTML templates
+**Learning:** Even simple success/callback screens (like OAuth redirects) rendered as inline strings in API routes need full HTML structure (`<!DOCTYPE html>`, `<html lang="en">`, `<meta name="viewport">`). Without them, they break on mobile and are inaccessible to screen readers. Relying on inline `onmouseover`/`onmouseout` for hover states prevents keyboard users from seeing focus states. Hardcoded colors fail to respect system dark mode preferences.
+**Action:** When creating or modifying inline HTML responses, always include standard boilerplate, use `<style>` blocks with CSS variables and `@media (prefers-color-scheme: dark)` for theme support, and define `:focus-visible` pseudo-classes to ensure keyboard accessibility. Ensure semantic elements like `<main>` are used.
