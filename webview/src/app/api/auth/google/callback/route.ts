@@ -14,11 +14,28 @@ function escapeHtml(unsafe: string): string {
          .replace(/'/g, "&#039;");
 }
 
+const HTML_TEMPLATE = `
+<html>
+<head>
+    <title>__TITLE__</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: __BG_COLOR__; flex-direction: column; text-align: center; padding: 20px;">
+    <h2 style="color: __COLOR__;">__ICON__ __TITLE__</h2>
+    <p>__MESSAGE__</p>
+    <p>You can close this window and return to the bot.</p>
+    <button onclick="window.close(); window.Telegram?.WebApp?.close?.();" aria-label="Close this window" style="padding: 10px 20px; font-size: 16px; background: #0088cc; color: white; border: none; border-radius: 5px; cursor: pointer; margin-top: 20px; transition: background 0.2s;" onmouseover="this.style.background='#0077b3'" onmouseout="this.style.background='#0088cc'">Close App</button>
+    __AUTO_CLOSE_SCRIPT__
+</body>
+</html>
+`;
+
 function renderHtml(title: string, message: string, isError: boolean, status: number) {
     const color = isError ? '#f44336' : '#4caf50';
     const bgColor = isError ? '#ffebee' : '#e6f8fa';
     const safeTitle = escapeHtml(title);
     const safeMessage = escapeHtml(message);
+    const icon = isError ? '❌' : '✅';
 
     // Auto-close only on success
     const autoCloseScript = isError ? '' : `
@@ -30,24 +47,35 @@ function renderHtml(title: string, message: string, isError: boolean, status: nu
           </script>
     `;
 
-    return new NextResponse(`
-      <html>
-        <head>
-          <title>${safeTitle}</title>
-          <script src="https://telegram.org/js/telegram-web-app.js"></script>
-        </head>
-        <body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: ${bgColor}; flex-direction: column; text-align: center; padding: 20px;">
-          <h2 style="color: ${color};">${isError ? '❌' : '✅'} ${safeTitle}</h2>
-          <p>${safeMessage}</p>
-          <p>You can close this window and return to the bot.</p>
-          <button onclick="window.close(); window.Telegram?.WebApp?.close?.();" aria-label="Close this window" style="padding: 10px 20px; font-size: 16px; background: #0088cc; color: white; border: none; border-radius: 5px; cursor: pointer; margin-top: 20px; transition: background 0.2s;" onmouseover="this.style.background='#0077b3'" onmouseout="this.style.background='#0088cc'">Close App</button>
-          ${autoCloseScript}
-        </body>
-      </html>
-    `, {
+    const html = HTML_TEMPLATE
+        .replace(/__TITLE__/g, safeTitle)
+        .replace(/__BG_COLOR__/g, bgColor)
+        .replace(/__COLOR__/g, color)
+        .replace(/__ICON__/g, icon)
+        .replace(/__MESSAGE__/g, safeMessage)
+        .replace(/__AUTO_CLOSE_SCRIPT__/g, autoCloseScript);
+
+    return new NextResponse(html, {
         status,
         headers: { 'Content-Type': 'text/html' }
     });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function saveTokensToDb(userId: string, tokens: any) {
+    const docRef = db!.collection('users').doc(userId).collection('google_auth').doc('tokens');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (tokens.access_token) updateData.access_token = tokens.access_token;
+    if (typeof tokens.expiry_date === 'number') updateData.expiry_date = tokens.expiry_date;
+    if (tokens.refresh_token) updateData.refresh_token = tokens.refresh_token;
+    if (tokens.scope) updateData.scope = tokens.scope;
+    if (tokens.token_type) updateData.token_type = tokens.token_type;
+
+    await docRef.set(updateData, { merge: true });
 }
 
 export async function GET(request: Request) {
@@ -87,36 +115,13 @@ export async function GET(request: Request) {
             return renderHtml('Database Error', 'Database not configured', true, 500);
         }
 
-        const docRef = db.collection('users').doc(stateCheck.userId).collection('google_auth').doc('tokens');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updateData: any = {
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-        };
-
-        if (tokens.access_token) {
-            updateData.access_token = tokens.access_token;
-        }
-        if (typeof tokens.expiry_date === 'number') {
-            updateData.expiry_date = tokens.expiry_date;
-        }
-        if (tokens.refresh_token) {
-            updateData.refresh_token = tokens.refresh_token;
-        }
-        if (tokens.scope) {
-            updateData.scope = tokens.scope;
-        }
-        if (tokens.token_type) {
-            updateData.token_type = tokens.token_type;
-        }
-
-        await docRef.set(updateData, { merge: true });
+        await saveTokensToDb(stateCheck.userId, tokens);
 
         // Verify the save worked
-        const savedDoc = await docRef.get();
+        const savedDoc = await db.collection('users').doc(stateCheck.userId).collection('google_auth').doc('tokens').get();
         if (savedDoc.exists) {
             const savedData = savedDoc.data();
-            if (savedData && typeof savedData === 'object') {
-            } else {
+            if (!savedData || typeof savedData !== 'object') {
                 console.error('[Google Callback] Verification - Document data is undefined or not an object');
             }
         } else {
