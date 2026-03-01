@@ -436,18 +436,21 @@ function createBot(db, { webhookRef = null } = {}) {
     activeRequests.set(userId, controller);
 
     try {
-      const facts = await getAllFacts(db, userId);
-      const memories = await getRecentMemories(db, userId, MEMORY_TURNS);
+      // ⚡ Bolt: Fetch all independent user context data concurrently to reduce database latency
+      const [facts, memories, googleTokens, userTimezone] = await Promise.all([
+        getAllFacts(db, userId),
+        getRecentMemories(db, userId, MEMORY_TURNS),
+        getGoogleTokens(db, userId),
+        storageGet(db, userId, 'timezone')
+      ]);
 
       // Check whether the user has linked their Google account
-      const googleTokens = await getGoogleTokens(db, userId);
       const hasGoogleAuth = googleTokens !== null;
 
       // Build history (may include a compressed summary of older turns)
       const historyMessages = await buildMessageHistory(memories, controller.signal);
 
       // Inject a planning nudge for complex multi-step requests
-      const userTimezone = await storageGet(db, userId, 'timezone');
       let systemContent = buildSystemMessage(facts, admin, userTimezone, hasGoogleAuth);
       if (isMultiStepRequest(userMessage)) {
         systemContent += '\n\n[Hint] This request appears to involve multiple steps. Consider using the `think` and `plan` tools before acting.';
