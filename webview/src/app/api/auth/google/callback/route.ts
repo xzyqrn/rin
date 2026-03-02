@@ -57,6 +57,50 @@ const SUCCESS_HTML = `<!DOCTYPE html>
       </html>
 `;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function saveTokensToDatabase(userId: string, tokens: any) {
+    if (!db) {
+        throw new Error('Database not configured');
+    }
+
+    const docRef = db.collection('users').doc(userId).collection('google_auth').doc('tokens');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (tokens.access_token) {
+        updateData.access_token = tokens.access_token;
+    }
+    if (typeof tokens.expiry_date === 'number') {
+        updateData.expiry_date = tokens.expiry_date;
+    }
+    if (tokens.refresh_token) {
+        updateData.refresh_token = tokens.refresh_token;
+    }
+    if (tokens.scope) {
+        updateData.scope = tokens.scope;
+    }
+    if (tokens.token_type) {
+        updateData.token_type = tokens.token_type;
+    }
+
+    await docRef.set(updateData, { merge: true });
+
+    // Verify the save worked
+    const savedDoc = await docRef.get();
+    if (savedDoc.exists) {
+        const savedData = savedDoc.data();
+        if (savedData && typeof savedData === 'object') {
+            // success
+        } else {
+            console.error('[Google Callback] Verification - Document data is undefined or not an object');
+        }
+    } else {
+        console.error('[Google Callback] Verification - Document not found after save!');
+    }
+}
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const { searchParams } = url;
@@ -88,45 +132,11 @@ export async function GET(request: Request) {
         const oauth2Client = getOAuth2Client(url.origin);
         const { tokens } = await oauth2Client.getToken(code);
 
-        if (!db) {
-            console.error('[Google Callback] Firebase DB is not initialized! Could not save tokens.');
-            return sendErrorResponse('Database Error', 'Database not configured', 500);
-        }
-
-        const docRef = db.collection('users').doc(stateCheck.userId).collection('google_auth').doc('tokens');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updateData: any = {
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-        };
-
-        if (tokens.access_token) {
-            updateData.access_token = tokens.access_token;
-        }
-        if (typeof tokens.expiry_date === 'number') {
-            updateData.expiry_date = tokens.expiry_date;
-        }
-        if (tokens.refresh_token) {
-            updateData.refresh_token = tokens.refresh_token;
-        }
-        if (tokens.scope) {
-            updateData.scope = tokens.scope;
-        }
-        if (tokens.token_type) {
-            updateData.token_type = tokens.token_type;
-        }
-
-        await docRef.set(updateData, { merge: true });
-
-        // Verify the save worked
-        const savedDoc = await docRef.get();
-        if (savedDoc.exists) {
-            const savedData = savedDoc.data();
-            if (savedData && typeof savedData === 'object') {
-            } else {
-                console.error('[Google Callback] Verification - Document data is undefined or not an object');
-            }
-        } else {
-            console.error('[Google Callback] Verification - Document not found after save!');
+        try {
+            await saveTokensToDatabase(stateCheck.userId, tokens);
+        } catch (dbErr) {
+            console.error('[Google Callback] Database Error:', dbErr);
+            return sendErrorResponse('Database Error', 'Database not configured or unable to save tokens', 500);
         }
 
         // After success, we can redirect back to Telegram or show a success page
