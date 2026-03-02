@@ -41,6 +41,58 @@ function renderHtmlError(message: string, statusCode: number): NextResponse {
     });
 }
 
+const SUCCESS_HTML = `
+      <html>
+        <head>
+          <title>Success</title>
+          <script src="https://telegram.org/js/telegram-web-app.js"></script>
+        </head>
+        <body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #e6f8fa; flex-direction: column;">
+          <h2 style="color: #4caf50;">✅ Google Account successfully linked!</h2>
+          <p>Your tokens have been saved to the database.</p>
+          <p>You can close this window and return to the bot. This window will close automatically.</p>
+          <button onclick="window.close(); window.Telegram?.WebApp?.close?.();" aria-label="Close this window" style="padding: 10px 20px; font-size: 16px; background: #0088cc; color: white; border: none; border-radius: 5px; cursor: pointer; margin-top: 20px; transition: background 0.2s;" onmouseover="this.style.background='#0077b3'" onmouseout="this.style.background='#0088cc'">Close App</button>
+          <script>
+            setTimeout(() => {
+              window.close();
+              window.Telegram?.WebApp?.close?.();
+            }, 3000);
+          </script>
+        </body>
+      </html>
+`;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function saveTokensToDb(userId: string, tokens: any) {
+    if (!db) return false;
+    const docRef = db.collection('users').doc(userId).collection('google_auth').doc('tokens');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (tokens.access_token) updateData.access_token = tokens.access_token;
+    if (typeof tokens.expiry_date === 'number') updateData.expiry_date = tokens.expiry_date;
+    if (tokens.refresh_token) updateData.refresh_token = tokens.refresh_token;
+    if (tokens.scope) updateData.scope = tokens.scope;
+    if (tokens.token_type) updateData.token_type = tokens.token_type;
+
+    await docRef.set(updateData, { merge: true });
+
+    // Verify the save worked
+    const savedDoc = await docRef.get();
+    if (savedDoc.exists) {
+        const savedData = savedDoc.data();
+        if (!savedData || typeof savedData !== 'object') {
+            console.error('[Google Callback] Verification - Document data is undefined or not an object');
+        }
+    } else {
+        console.error('[Google Callback] Verification - Document not found after save!');
+    }
+    return true;
+}
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const { searchParams } = url;
@@ -76,41 +128,7 @@ export async function GET(request: Request) {
             return renderHtmlError('Database not configured', 500);
         }
 
-        const docRef = db.collection('users').doc(stateCheck.userId).collection('google_auth').doc('tokens');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updateData: any = {
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-        };
-
-        if (tokens.access_token) {
-            updateData.access_token = tokens.access_token;
-        }
-        if (typeof tokens.expiry_date === 'number') {
-            updateData.expiry_date = tokens.expiry_date;
-        }
-        if (tokens.refresh_token) {
-            updateData.refresh_token = tokens.refresh_token;
-        }
-        if (tokens.scope) {
-            updateData.scope = tokens.scope;
-        }
-        if (tokens.token_type) {
-            updateData.token_type = tokens.token_type;
-        }
-
-        await docRef.set(updateData, { merge: true });
-
-        // Verify the save worked
-        const savedDoc = await docRef.get();
-        if (savedDoc.exists) {
-            const savedData = savedDoc.data();
-            if (savedData && typeof savedData === 'object') {
-            } else {
-                console.error('[Google Callback] Verification - Document data is undefined or not an object');
-            }
-        } else {
-            console.error('[Google Callback] Verification - Document not found after save!');
-        }
+        await saveTokensToDb(stateCheck.userId, tokens);
 
         // After success, we can redirect back to Telegram or show a success page
         // Using a telegram deep link to close the web app:
