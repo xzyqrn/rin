@@ -436,11 +436,14 @@ function createBot(db, { webhookRef = null } = {}) {
     activeRequests.set(userId, controller);
 
     try {
-      const facts = await getAllFacts(db, userId);
-      const memories = await getRecentMemories(db, userId, MEMORY_TURNS);
+      // Fetch required initial DB states concurrently to reduce latency
+      const [facts, memories, googleTokens] = await Promise.all([
+        getAllFacts(db, userId),
+        getRecentMemories(db, userId, MEMORY_TURNS),
+        getGoogleTokens(db, userId)
+      ]);
 
       // Check whether the user has linked their Google account
-      const googleTokens = await getGoogleTokens(db, userId);
       const hasGoogleAuth = googleTokens !== null;
 
       // Build history (may include a compressed summary of older turns)
