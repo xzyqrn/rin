@@ -28,6 +28,13 @@ const getErrorHtml = (title: string, message: string) => `<!DOCTYPE html>
     </html>
 `;
 
+const sendErrorResponse = (title: string, message: string, status: number) => {
+    return new NextResponse(getErrorHtml(title, message), {
+        status,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    });
+};
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const { searchParams } = url;
@@ -37,32 +44,21 @@ export async function GET(request: Request) {
 
     if (error) {
         console.error('[Google Callback] Auth error:', error);
-        return new NextResponse(getErrorHtml('Authentication Error', `Auth error: ${error}`), {
-            status: 400,
-            headers: { 'Content-Type': 'text/html; charset=utf-8' }
-        });
+        return sendErrorResponse('Authentication Error', `Auth error: ${error}`, 400);
     }
     if (!code || !state) {
         console.error('[Google Callback] Missing parameters:', { hasCode: !!code, hasState: !!state });
-        return new NextResponse(getErrorHtml('Invalid Request', 'Missing code or state'), {
-            status: 400,
-            headers: { 'Content-Type': 'text/html; charset=utf-8' }
-        });
+        return sendErrorResponse('Invalid Request', 'Missing code or state', 400);
     }
 
     const stateCheck = verifySignedOAuthState(state);
     if (!stateCheck.ok) {
         console.error('[Google Callback] Invalid OAuth state:', stateCheck.error);
         const isConfigError = /not configured/i.test(stateCheck.error);
-        return new NextResponse(
-            getErrorHtml(
-                isConfigError ? 'Server Configuration Error' : 'Invalid Session',
-                isConfigError ? 'OAuth state verification is not configured on the server.' : 'Invalid or expired OAuth state. Please run /linkgoogle again.'
-            ),
-            {
-                status: isConfigError ? 500 : 400,
-                headers: { 'Content-Type': 'text/html; charset=utf-8' }
-            }
+        return sendErrorResponse(
+            isConfigError ? 'Server Configuration Error' : 'Invalid Session',
+            isConfigError ? 'OAuth state verification is not configured on the server.' : 'Invalid or expired OAuth state. Please run /linkgoogle again.',
+            isConfigError ? 500 : 400
         );
     }
 
@@ -72,10 +68,7 @@ export async function GET(request: Request) {
 
         if (!db) {
             console.error('[Google Callback] Firebase DB is not initialized! Could not save tokens.');
-            return new NextResponse(getErrorHtml('Database Error', 'Database not configured'), {
-                status: 500,
-                headers: { 'Content-Type': 'text/html; charset=utf-8' }
-            });
+            return sendErrorResponse('Database Error', 'Database not configured', 500);
         }
 
         const docRef = db.collection('users').doc(stateCheck.userId).collection('google_auth').doc('tokens');
@@ -142,9 +135,6 @@ export async function GET(request: Request) {
     } catch (err) {
         console.error('[Google Callback] Error in google callback:', err);
         console.error('[Google Callback] Error stack:', err instanceof Error ? err.stack : 'No stack trace');
-        return new NextResponse(getErrorHtml('Internal Error', 'Internal Server Error during authorization.'), {
-            status: 500,
-            headers: { 'Content-Type': 'text/html; charset=utf-8' }
-        });
+        return sendErrorResponse('Internal Error', 'Internal Server Error during authorization.', 500);
     }
 }
