@@ -24,7 +24,7 @@ A personal Telegram bot powered by **Google Gemini 2.5 Flash Lite**. Rin is an *
 ## Features
 
 - **Autonomous Agency** — Rin uses a Reasoning loop (Think → Plan → Act → Reflect) to handle complex, multi-step requests.
-- **Persistent Memory** — Memory of conversation history and extracted user facts are stored in Firestore, so Rin "knows" you across restarts.
+- **Persistent Memory** — Memory of conversation history and extracted user facts are stored in SQLite, so Rin "knows" you across restarts.
 - **Per-User Isolation** — Every user has their own private memory, notes, reminders, files, and sandboxed storage.
 - **Google Workspace Integration** — Securely link your Google account to interact with Drive, Calendar, Gmail, Tasks, and Classroom.
 - **File Handling** — Upload any file (photo, video, doc, voice); Rin saves it to a per-user directory on the VPS and can read/write/list or send them back to you.
@@ -40,7 +40,8 @@ A personal Telegram bot powered by **Google Gemini 2.5 Flash Lite**. Rin is an *
 |-----------|-------------------|
 | Runtime | Node.js v18+ |
 | Telegram API | [telegraf](https://github.com/telegraf/telegraf) v4 |
-| Database | [Firebase Firestore](https://firebase.google.com/docs/firestore) |
+| Database | [SQLite](https://www.sqlite.org/) via [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) |
+| Logging | [pino](https://github.com/pinojs/pino) (structured JSON logging) |
 | LLM Provider | [Google Gemini](https://ai.google.dev/) (Native) or [OpenRouter](https://openrouter.ai) |
 | Web Scraping | axios + cheerio (with private IP protection) |
 | Scheduling | node-cron |
@@ -54,7 +55,7 @@ A personal Telegram bot powered by **Google Gemini 2.5 Flash Lite**. Rin is an *
 ├── src/
 │   ├── index.js                Entry point — env check, DB init, wires everything together
 │   ├── bot.js                  Telegraf setup, commands, rate limiting, message handler
-│   ├── database.js             Firestore schema and all DB helpers
+│   ├── database.js             SQLite schema and all DB helpers
 │   ├── llm.js                  LLM client, tool-call loop, usage tracking, fact extraction
 │   ├── personality.js          Rin's system prompts (base + admin + user-specific info)
 │   ├── shell.js                Safe shell execution (timeout, output cap, denylist)
@@ -174,7 +175,7 @@ Rin uses function calling to take real-world actions.
 
 Rin runs three main polling loops for automation:
 
-1. **Reminder Poller (30s)**: Checks Firestore for due reminders and delivers them.
+1. **Reminder Poller (30s)**: Checks the database for due reminders and delivers them.
 2. **Health Poller (60s)**: pings monitored URLs; alerts on success/failure state transitions.
 3. **Cron Job Manager**: Orchestrates recurring tasks (hourly digests, midnight backups, etc.).
 
@@ -182,15 +183,17 @@ Rin runs three main polling loops for automation:
 
 ## Database
 
-Rin uses **Google Cloud Firestore**.
+Rin uses **SQLite** via better-sqlite3. The database file is stored at `data/rin.db` by default (configurable via `SQLITE_DB_PATH`).
 
-- `users/{id}/memory`: Chat history (auto-compressed when old).
-- `users/{id}/facts`: Key information Rin has learned about you.
-- `users/{id}/notes`: User-created notes (cached in Firestore).
-- `users/{id}/google_auth`: Encrypted OAuth tokens for Google services.
+- `memory`: Chat history per user (auto-compressed when old).
+- `facts`: Key information Rin has learned about each user.
+- `notes`: User-created notes.
+- `google_auth`: OAuth tokens for Google services.
 - `reminders`, `cron_jobs`, `health_checks`: Task and monitoring schedules.
 - `api_metrics`: Token usage logs for billing and usage tracking.
 - `webhooks`: Registry of secret tokens and delivery targets.
+- `audit_log`: Admin action audit trail (shell commands, etc.).
+- `rate_limits`: Per-user hourly rate limit counters.
 
 ---
 
@@ -199,7 +202,7 @@ Rin uses **Google Cloud Firestore**.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Yes | Token from @BotFather |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes | Service Account key (JSON string or file) |
+| `SQLITE_DB_PATH` | No | Path to SQLite database file (default: `data/rin.db`) |
 | `GEMINI_API_KEY` | Yes* | Key for Google Gemini (Primary/Recommended) |
 | `OPENROUTER_API_KEY` | No | Key for OpenRouter (Alternative) |
 | `ADMIN_USER_ID` | Yes | Your Telegram ID (to enable admin tools) |
@@ -224,10 +227,9 @@ Rin uses **Google Cloud Firestore**.
 - **`TELEGRAM_BOT_TOKEN is not set`**: Check your `.env` file for missing keys.
 - **`Failed to set commands`**: Network error or invalid token; retry or check internet on VPS.
 
-### Database (Firestore)
-- **`Firestore not initialized`**: Firebase service account JSON is either missing or malformed.
+### Database (SQLite)
+- **`SQLite not initialized`**: The database file path is inaccessible or the `data/` directory could not be created.
 - **`Rate limit transaction failed`**: High-frequency database updates; the bot usually "fails open" to avoid blocking messages.
-- **`Doc already exists`**: Conflict when creating a webhook or cron job with a duplicate name.
 
 ### Google Integration
 - **`Google account is not linked for this user.`**: Run `/linkgoogle` or call `google_auth_status` to get the exact relink URL.

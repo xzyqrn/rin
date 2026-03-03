@@ -66,7 +66,7 @@ async function downloadTelegramFile(botToken, fileId, userId, originalName) {
       try { totalSize += fs.statSync(path.join(quotaCheckDir, name)).size; } catch { /* skip */ }
     }
     if (totalSize + fileSize > MAX_USER_QUOTA_MB * 1024 * 1024) {
-      throw new Error(`Upload would exceed your storage quota (${MAX_USER_QUOTA_MB} MB). Use /myfiles to see your uploads.`);
+      throw new Error(`Upload would exceed your storage quota (${fmtSize(totalSize)} used of ${MAX_USER_QUOTA_MB} MB, file is ${fmtSize(fileSize)}). Use /myfiles to see your uploads.`);
     }
   }
 
