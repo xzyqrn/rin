@@ -569,7 +569,7 @@ async function logGoogleToolMetric(userId, service, action, status, errorCategor
 
 async function cleanupOldRateLimits() {
   if (!sqliteDB) return;
-  const cutoff = String(Math.floor(Date.now() / 1000) - 86400 * 7);
+  const cutoff = String(Math.floor(Date.now() / 3600000) * 3600 - 86400 * 7);
   sqliteDB.prepare('DELETE FROM rate_limits WHERE window_start < ?').run(cutoff);
 }
 

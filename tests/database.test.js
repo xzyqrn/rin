@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const fs = require('fs');
 
+const os = require('os');
+
 // Use a temporary DB for each test run
-const TEST_DB_PATH = path.join('/tmp', `rin-test-${Date.now()}.db`);
+const TEST_DB_PATH = path.join(os.tmpdir(), `rin-test-${Date.now()}.db`);
 process.env.SQLITE_DB_PATH = TEST_DB_PATH;
 
 // Must require after setting env
