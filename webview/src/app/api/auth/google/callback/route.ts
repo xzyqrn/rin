@@ -11,39 +11,25 @@ async function saveTokensToDatabase(userId: string, tokens: any) {
     }
 
     const docRef = db.collection('users').doc(userId).collection('google_auth').doc('tokens');
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updateData: any = {
-        updated_at: admin.firestore.FieldValue.serverTimestamp()
+        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        ...(tokens.access_token && { access_token: tokens.access_token }),
+        ...(typeof tokens.expiry_date === 'number' && { expiry_date: tokens.expiry_date }),
+        ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
+        ...(tokens.scope && { scope: tokens.scope }),
+        ...(tokens.token_type && { token_type: tokens.token_type }),
     };
-
-    if (tokens.access_token) {
-        updateData.access_token = tokens.access_token;
-    }
-    if (typeof tokens.expiry_date === 'number') {
-        updateData.expiry_date = tokens.expiry_date;
-    }
-    if (tokens.refresh_token) {
-        updateData.refresh_token = tokens.refresh_token;
-    }
-    if (tokens.scope) {
-        updateData.scope = tokens.scope;
-    }
-    if (tokens.token_type) {
-        updateData.token_type = tokens.token_type;
-    }
 
     await docRef.set(updateData, { merge: true });
 
     // Verify the save worked
     const savedDoc = await docRef.get();
-    if (savedDoc.exists) {
-        const savedData = savedDoc.data();
-        if (savedData && typeof savedData === 'object') {
-        } else {
-            console.error('[Google Callback] Verification - Document data is undefined or not an object');
-        }
-    } else {
+    if (!savedDoc.exists) {
         console.error('[Google Callback] Verification - Document not found after save!');
+    } else if (!savedDoc.data() || typeof savedDoc.data() !== 'object') {
+        console.error('[Google Callback] Verification - Document data is undefined or not an object');
     }
 }
 
