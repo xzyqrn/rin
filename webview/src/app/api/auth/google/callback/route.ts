@@ -5,32 +5,41 @@ import { successResponse, errorResponse } from '@/lib/html-response';
 import * as admin from 'firebase-admin';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildTokenUpdateData(tokens: any) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    };
+    if (tokens.access_token) updateData.access_token = tokens.access_token;
+    if (typeof tokens.expiry_date === 'number') updateData.expiry_date = tokens.expiry_date;
+    if (tokens.refresh_token) updateData.refresh_token = tokens.refresh_token;
+    if (tokens.scope) updateData.scope = tokens.scope;
+    if (tokens.token_type) updateData.token_type = tokens.token_type;
+    return updateData;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function verifyTokenSave(savedData: any) {
+    if (!savedData) {
+        console.error('[Google Callback] Verification - Document not found after save!');
+    } else if (typeof savedData !== 'object') {
+        console.error('[Google Callback] Verification - Document data is undefined or not an object');
+    }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function saveTokensToDatabase(userId: string, tokens: any) {
     if (!db) {
         throw new Error('Firebase DB is not initialized! Could not save tokens.');
     }
 
     const docRef = db.collection('users').doc(userId).collection('google_auth').doc('tokens');
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const updateData: any = {
-        updated_at: admin.firestore.FieldValue.serverTimestamp(),
-        ...(tokens.access_token && { access_token: tokens.access_token }),
-        ...(typeof tokens.expiry_date === 'number' && { expiry_date: tokens.expiry_date }),
-        ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
-        ...(tokens.scope && { scope: tokens.scope }),
-        ...(tokens.token_type && { token_type: tokens.token_type }),
-    };
+    const updateData = buildTokenUpdateData(tokens);
 
     await docRef.set(updateData, { merge: true });
 
-    // Verify the save worked
     const savedDoc = await docRef.get();
-    if (!savedDoc.exists) {
-        console.error('[Google Callback] Verification - Document not found after save!');
-    } else if (!savedDoc.data() || typeof savedDoc.data() !== 'object') {
-        console.error('[Google Callback] Verification - Document data is undefined or not an object');
-    }
+    verifyTokenSave(savedDoc.exists ? savedDoc.data() : null);
 }
 
 export async function GET(request: Request) {
