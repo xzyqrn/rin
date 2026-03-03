@@ -85,7 +85,7 @@ async function runCommand(command, timeoutMs = DEFAULT_TIMEOUT_MS) {
 function truncate(str) {
   if (str.length <= MAX_OUTPUT_CHARS) return str;
   const cut = str.length - MAX_OUTPUT_CHARS;
-  return str.slice(0, MAX_OUTPUT_CHARS) + `\n... [${cut} chars truncated]`;
+  return str.slice(0, MAX_OUTPUT_CHARS) + `\n... [TRUNCATED — ${cut} chars omitted]`;
 }
 
 function formatOutput(stdout, stderr, exitCode) {

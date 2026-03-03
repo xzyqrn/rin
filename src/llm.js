@@ -34,12 +34,8 @@ function _trackUsage(completion) {
 
 function _logGuardEvent(eventType, payload = {}) {
   try {
-    if (!_db || typeof _db.collection !== 'function') return;
-    _db.collection('agent_guard_metrics').add({
-      event_type: eventType,
-      payload,
-      created_at: Math.floor(Date.now() / 1000),
-    }).catch(() => {});
+    const { logAgentGuardMetric } = require('./database');
+    logAgentGuardMetric(eventType, payload).catch(() => {});
   } catch {
     // Best-effort metrics only.
   }

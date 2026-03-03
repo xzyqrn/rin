@@ -1,7 +1,8 @@
 'use strict';
 
 const { getDueReminders, deleteFiredReminder,
-  getHealthChecksToRun, updateHealthCheckStatus } = require('./database');
+  getHealthChecksToRun, updateHealthCheckStatus,
+  cleanupOldRateLimits } = require('./database');
 const { checkUrl } = require('./capabilities/web');
 
 const REMINDER_INTERVAL_MS = 30_000;  // 30 s
@@ -12,7 +13,7 @@ const RATE_LIMIT_CLEANUP_MS = 86_400_000; // 24 h
  * Start all background polling loops.
  * Returns a stop() function that clears all intervals.
  *
- * @param {object} db       - Firestore database instance
+ * @param {object} db       - Database instance (kept for API compat)
  * @param {object} telegram - Telegraf telegram instance
  */
 function startPollers(db, telegram) {
@@ -73,27 +74,11 @@ function startPollers(db, telegram) {
   }
 
   // ── Rate limit cleanup ─────────────────────────────────────────────────────
-  async function cleanupRateLimits() {
+  async function doCleanupRateLimits() {
     if (cleanupRunning) return;
-    if (!db) return;
     cleanupRunning = true;
     try {
-      const usersSnapshot = await db.collection('users').get();
-      if (usersSnapshot.empty) return;
-      const cutoff = String(Math.floor(Date.now() / 1000) - 86400 * 7);
-      for (const userDoc of usersSnapshot.docs) {
-        const rateLimitsSnapshot = await userDoc.ref.collection('rate_limits').get();
-        if (rateLimitsSnapshot.empty) continue;
-        const batch = db.batch();
-        let count = 0;
-        rateLimitsSnapshot.docs.forEach((doc) => {
-          if (doc.id < cutoff) {
-            batch.delete(doc.ref);
-            count++;
-          }
-        });
-        if (count > 0) await batch.commit();
-      }
+      await cleanupOldRateLimits();
     } catch (err) {
       console.error('[poller] Rate limit cleanup:', err.message);
     } finally {
@@ -104,11 +89,11 @@ function startPollers(db, telegram) {
   // Fire immediately on start to catch anything missed while offline
   tickReminders().catch((e) => console.error('[poller] Reminder init:', e));
   tickHealthChecks().catch((e) => console.error('[poller] Health init:', e));
-  cleanupRateLimits().catch((e) => console.error('[poller] Rate limit cleanup init:', e));
+  doCleanupRateLimits().catch((e) => console.error('[poller] Rate limit cleanup init:', e));
 
   const t1 = setInterval(tickReminders, REMINDER_INTERVAL_MS);
   const t2 = setInterval(tickHealthChecks, HEALTH_CHECK_INTERVAL_MS);
-  const t3 = setInterval(cleanupRateLimits, RATE_LIMIT_CLEANUP_MS);
+  const t3 = setInterval(doCleanupRateLimits, RATE_LIMIT_CLEANUP_MS);
 
   return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
 }

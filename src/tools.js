@@ -114,17 +114,10 @@ function normalizeGoogleError(err, userId) {
   return `[Google Error] ${details.message}`;
 }
 
-async function logGoogleToolMetric(db, userId, service, action, status, errorCategory = '') {
+async function logGoogleToolMetricFn(db, userId, service, action, status, errorCategory = '') {
   try {
-    if (!db || typeof db.collection !== 'function') return;
-    await db.collection('google_tool_metrics').add({
-      user_id: userId,
-      service,
-      action,
-      status,
-      error_category: errorCategory || null,
-      created_at: Math.floor(Date.now() / 1000),
-    });
+    const { logGoogleToolMetric } = require('./database');
+    await logGoogleToolMetric(userId, service, action, status, errorCategory);
   } catch {
     // Best-effort metrics only.
   }
@@ -1237,11 +1230,11 @@ function buildTools(db, userId, { admin = false, hasGoogleAuth = false, webhookS
     async function runGoogleTool(service, action, fn) {
       try {
         const result = await fn();
-        await logGoogleToolMetric(db, userId, service, action, 'success');
+        await logGoogleToolMetricFn(db, userId, service, action, 'success');
         return result;
       } catch (err) {
         const details = categorizeGoogleError(err);
-        await logGoogleToolMetric(db, userId, service, action, 'error', details.category);
+        await logGoogleToolMetricFn(db, userId, service, action, 'error', details.category);
         return normalizeGoogleError(err, userId);
       }
     }

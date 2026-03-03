@@ -27,9 +27,9 @@ if ((process.env.GOOGLE_OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL) && !
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 const db = initDb();
 if (db) {
-  console.log('[db] Firestore initialized.');
+  console.log('[db] SQLite initialized.');
 } else {
-  console.warn('[db] Firestore not configured — database features will be disabled.');
+  console.warn('[db] SQLite not configured — database features will be disabled.');
 }
 
 initLlm(db);

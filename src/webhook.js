@@ -2,13 +2,14 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const { getWebhook, createWebhook, removeWebhooks, listWebhooksByUser } = require('./database');
 
 /**
  * Start an Express HTTP server for incoming webhooks.
  * Webhooks are registered in the DB as (user_id, name, token, description).
  * Any POST to /webhook/:token delivers the request body as a Telegram message.
  *
- * @param {object} db       - Firestore database instance
+ * @param {object} db       - Database instance (kept for API compat)
  * @param {object} telegram - Telegraf telegram instance
  * @returns {{ app, server, addWebhook, removeWebhook, listWebhooks }}
  */
@@ -22,6 +23,8 @@ function _checkWebhookRateLimit(token) {
   _webhookRateLimits.set(token, entry);
   return entry.count <= 60;
 }
+
+const WEBHOOK_BODY_LIMIT = 3500;
 
 function startWebhookServer(db, telegram) {
   const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
@@ -65,15 +68,15 @@ function startWebhookServer(db, telegram) {
       return res.status(429).json({ error: 'Rate limit exceeded. Max 60 requests/minute per webhook.' });
     }
 
-    const doc = await db.collection('webhooks').doc(token).get();
-    if (!doc.exists || doc.data().enabled !== 1) return res.status(404).json({ error: 'Unknown webhook' });
-    const hook = doc.data();
+    const hook = await getWebhook(token);
+    if (!hook || hook.enabled !== 1) return res.status(404).json({ error: 'Unknown webhook' });
 
     const body = typeof req.body === 'object'
       ? JSON.stringify(req.body, null, 2)
       : String(req.body || '(empty body)');
 
-    const text = `Webhook [${hook.name}]:\n${body.slice(0, 3500)}`;
+    const truncated = body.length > WEBHOOK_BODY_LIMIT;
+    const text = `Webhook [${hook.name}]:\n${body.slice(0, WEBHOOK_BODY_LIMIT)}${truncated ? '\n... [TRUNCATED]' : ''}`;
 
     try {
       await telegram.sendMessage(hook.user_id, text);
@@ -86,45 +89,19 @@ function startWebhookServer(db, telegram) {
 
   async function addWebhook(userId, name, description = '') {
     const token = crypto.randomBytes(24).toString('hex');
-    await db.collection('webhooks').doc(token).set({
-      user_id: userId,
-      name,
-      token,
-      description,
-      enabled: 1,
-      created_at: Math.floor(Date.now() / 1000)
-    });
+    await createWebhook(userId, name, token, description);
     const baseUrl = process.env.WEBHOOK_BASE_URL || `http://YOUR_VPS_IP:${port}`;
     return { token, url: `${baseUrl}/webhook/${token}` };
   }
 
   async function removeWebhook(userId, name) {
-    const snapshot = await db.collection('webhooks')
-      .where('user_id', '==', userId)
-      .where('name', '==', name)
-      .get();
-
-    if (snapshot.empty) return false;
-
-    const batch = db.batch();
-    snapshot.forEach(doc => batch.delete(doc.ref));
-    await batch.commit();
-    return true;
+    return await removeWebhooks(userId, name);
   }
 
   async function listWebhooks(userId) {
     const baseUrl = process.env.WEBHOOK_BASE_URL || `http://YOUR_VPS_IP:${port}`;
-    const snapshot = await db.collection('webhooks')
-      .where('user_id', '==', userId)
-      .where('enabled', '==', 1)
-      .get();
-
-    const webhooks = [];
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      webhooks.push({ ...data, url: `${baseUrl}/webhook/${data.token}` });
-    });
-    return webhooks;
+    const hooks = await listWebhooksByUser(userId);
+    return hooks.map(h => ({ ...h, url: `${baseUrl}/webhook/${h.token}` }));
   }
 
   const server = app.listen(port, () => {

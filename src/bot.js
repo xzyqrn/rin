@@ -9,7 +9,8 @@ const { createSignedOAuthState } = require('./oauth-state');
 const { splitAssistantReply } = require('./reply-splitter');
 const { checkAndIncrementRateLimit,
   saveMemory, getRecentMemories,
-  upsertFact, getAllFacts, storageGet, getGoogleTokens } = require('./database');
+  upsertFact, getAllFacts, storageGet, getGoogleTokens,
+  logAuditEvent } = require('./database');
 const { downloadTelegramFile, listUserUploads,
   fmtSize } = require('./capabilities/uploads');
 
@@ -350,6 +351,7 @@ function createBot(db, { webhookRef = null } = {}) {
     if (!command) return ctx.reply('Usage: /shell <command>');
 
     const statusMsg = await ctx.reply(`Running: \`${command}\``, { parse_mode: 'Markdown' });
+    logAuditEvent(ctx.from.id, 'shell_command', command).catch(() => {});
     try {
       const result = await runCommand(command);
 
