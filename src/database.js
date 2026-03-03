@@ -1,447 +1,589 @@
 'use strict';
 
-const admin = require('firebase-admin');
-const fs = require('fs');
+const Database = require('better-sqlite3');
 const path = require('path');
 
-const FIREBASE_SERVICE_ACCOUNT_PATH = path.join(__dirname, '..', 'firebase-service-account.json');
-const envJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+const DB_PATH = process.env.SQLITE_DB_PATH || path.join(__dirname, '..', 'data', 'rin.db');
 
-let firestoreDB = null;
+let sqliteDB = null;
 
-if (envJson) {
-  try {
-    // If the JSON is multi-line in .env, some loaders only get the first line.
-    // We check if it looks incomplete and try to find where it might be in the full env.
-    let fullJson = envJson;
-    if (fullJson.trim().startsWith('{') && !fullJson.trim().endsWith('}')) {
-      // Deep search for the closing brace if the env loader truncated it
-      const rawEnv = fs.readFileSync(path.join(__dirname, '..', '.env'), 'utf8');
-      const match = rawEnv.match(/FIREBASE_SERVICE_ACCOUNT_JSON=({[\s\S]*?\n})/);
-      if (match) fullJson = match[1];
-    }
+function _ensureDir(filePath) {
+  const fs = require('fs');
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
 
-    const serviceAccount = JSON.parse(fullJson);
-    if (serviceAccount.private_key) {
-      serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
-    }
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    firestoreDB = admin.firestore();
-    console.log('[firebase] Initialized Firebase Admin SDK from environment');
-  } catch (error) {
-    console.error('[firebase] Failed to initialize Firebase from environment:', error.message);
-  }
-} else if (fs.existsSync(FIREBASE_SERVICE_ACCOUNT_PATH)) {
-  try {
-    const serviceAccount = require(FIREBASE_SERVICE_ACCOUNT_PATH);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    firestoreDB = admin.firestore();
-    console.log('[firebase] Initialized Firebase Admin SDK from file');
-  } catch (error) {
-    console.error('[firebase] Failed to initialize Firebase from file:', error);
-  }
-} else {
-  console.warn('[firebase] No FIREBASE_SERVICE_ACCOUNT_JSON in .env or firebase-service-account.json file found. Firebase features will be disabled.');
+function _initSchema(db) {
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      timestamp INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_user_ts ON memory(user_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS facts (
+      user_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (user_id, key)
+    );
+
+    CREATE TABLE IF NOT EXISTS reminders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      message TEXT NOT NULL,
+      fire_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_reminders_fire ON reminders(fire_at);
+    CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id);
+
+    CREATE TABLE IF NOT EXISTS notes (
+      user_id TEXT NOT NULL,
+      title_slug TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (user_id, title_slug)
+    );
+
+    CREATE TABLE IF NOT EXISTS storage (
+      user_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+      PRIMARY KEY (user_id, key)
+    );
+
+    CREATE TABLE IF NOT EXISTS cron_jobs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      schedule TEXT NOT NULL,
+      action TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cron_user ON cron_jobs(user_id);
+
+    CREATE TABLE IF NOT EXISTS health_checks (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      interval_minutes INTEGER NOT NULL DEFAULT 5,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_checked INTEGER,
+      last_status INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_health_user ON health_checks(user_id);
+
+    CREATE TABLE IF NOT EXISTS api_metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      model TEXT NOT NULL,
+      tokens_in INTEGER NOT NULL DEFAULT 0,
+      tokens_out INTEGER NOT NULL DEFAULT 0,
+      timestamp INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_ts ON api_metrics(timestamp);
+
+    CREATE TABLE IF NOT EXISTS rate_limits (
+      user_id TEXT NOT NULL,
+      window_start TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, window_start)
+    );
+
+    CREATE TABLE IF NOT EXISTS google_auth (
+      user_id TEXT PRIMARY KEY,
+      access_token TEXT,
+      refresh_token TEXT,
+      expiry_date INTEGER,
+      scope TEXT,
+      token_type TEXT,
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhooks_user ON webhooks(user_id);
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      detail TEXT,
+      timestamp INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(timestamp);
+
+    CREATE TABLE IF NOT EXISTS agent_guard_metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      payload TEXT,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS google_tool_metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      service TEXT NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      error_category TEXT,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+  `);
 }
 
 function initDb() {
-  return firestoreDB;
-}
-
-function getUserRef(userId) {
-  return firestoreDB.collection('users').doc(String(userId));
+  if (sqliteDB) return sqliteDB;
+  try {
+    _ensureDir(DB_PATH);
+    sqliteDB = new Database(DB_PATH);
+    _initSchema(sqliteDB);
+    console.log(`[db] SQLite initialized at ${DB_PATH}`);
+    return sqliteDB;
+  } catch (error) {
+    console.error('[db] Failed to initialize SQLite:', error.message);
+    return null;
+  }
 }
 
 // ── Conversation memory ────────────────────────────────────────────────────────
 
 async function saveMemory(db, userId, content) {
-  if (!firestoreDB) return;
-  const memRef = getUserRef(userId).collection('memory');
-  await memRef.add({
-    content,
-    timestamp: admin.firestore.FieldValue.serverTimestamp()
-  });
+  if (!sqliteDB) return;
+  const stmt = sqliteDB.prepare('INSERT INTO memory (user_id, content, timestamp) VALUES (?, ?, ?)');
+  stmt.run(String(userId), content, Math.floor(Date.now() / 1000));
 }
 
 async function getRecentMemories(db, userId, limit) {
-  if (!firestoreDB) return [];
+  if (!sqliteDB) return [];
   const count = limit || parseInt(process.env.MEMORY_TURNS || '20', 10);
-  const memRef = getUserRef(userId).collection('memory');
-  const snapshot = await memRef.orderBy('timestamp', 'desc').limit(count).get();
-  const memories = [];
-  snapshot.forEach(doc => memories.push({ content: doc.data().content }));
-  return memories.reverse();
+  const stmt = sqliteDB.prepare(
+    'SELECT content FROM memory WHERE user_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?'
+  );
+  const rows = stmt.all(String(userId), count);
+  return rows.reverse().map(r => ({ content: r.content }));
 }
 
 // ── User facts ─────────────────────────────────────────────────────────────────
 
 async function upsertFact(db, userId, key, value) {
-  if (!firestoreDB) return;
+  if (!sqliteDB) return;
   const factKey = key.trim().toLowerCase();
-  await getUserRef(userId).collection('facts').doc(factKey).set({ value: String(value).trim() });
+  const stmt = sqliteDB.prepare(
+    'INSERT INTO facts (user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value'
+  );
+  stmt.run(String(userId), factKey, String(value).trim());
 }
 
 async function getAllFacts(db, userId) {
-  if (!firestoreDB) return {};
-  const snapshot = await getUserRef(userId).collection('facts').get();
+  if (!sqliteDB) return {};
+  const stmt = sqliteDB.prepare('SELECT key, value FROM facts WHERE user_id = ?');
+  const rows = stmt.all(String(userId));
   const facts = {};
-  snapshot.forEach(doc => { facts[doc.id] = doc.data().value; });
+  for (const row of rows) facts[row.key] = row.value;
   return facts;
 }
 
 // ── Reminders ─────────────────────────────────────────────────────────────────
 
 async function addReminder(db, userId, message, fireAt) {
-  if (!firestoreDB) return 0;
-  const ref = await firestoreDB.collection('reminders').add({
-    user_id: userId,
-    message,
-    fire_at: fireAt,
-    created_at: Math.floor(Date.now() / 1000)
-  });
-  return ref.id;
+  if (!sqliteDB) return 0;
+  const stmt = sqliteDB.prepare(
+    'INSERT INTO reminders (user_id, message, fire_at, created_at) VALUES (?, ?, ?, ?)'
+  );
+  const info = stmt.run(String(userId), message, fireAt, Math.floor(Date.now() / 1000));
+  return String(info.lastInsertRowid);
 }
 
 async function getPendingReminders(db, userId) {
-  if (!firestoreDB) return [];
-  const snapshot = await firestoreDB.collection('reminders').where('user_id', '==', userId).get();
-  const reminders = [];
-  snapshot.forEach(doc => reminders.push({ id: doc.id, ...doc.data() }));
-  reminders.sort((a, b) => a.fire_at - b.fire_at);
-  return reminders;
+  if (!sqliteDB) return [];
+  const stmt = sqliteDB.prepare(
+    'SELECT id, user_id, message, fire_at, created_at FROM reminders WHERE user_id = ? ORDER BY fire_at ASC'
+  );
+  return stmt.all(String(userId)).map(r => ({ ...r, id: String(r.id) }));
 }
 
 async function deleteReminder(db, userId, id) {
-  if (!firestoreDB) return false;
-  const docRef = firestoreDB.collection('reminders').doc(String(id));
-  const doc = await docRef.get();
-  if (doc.exists && doc.data().user_id === userId) {
-    await docRef.delete();
-    return true;
-  }
-  return false;
+  if (!sqliteDB) return false;
+  const stmt = sqliteDB.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?');
+  const info = stmt.run(String(id), String(userId));
+  return info.changes > 0;
 }
 
 async function getDueReminders(db) {
-  if (!firestoreDB) return [];
+  if (!sqliteDB) return [];
   const now = Math.floor(Date.now() / 1000);
-  const snapshot = await firestoreDB.collection('reminders').where('fire_at', '<=', now).orderBy('fire_at', 'asc').get();
-  const due = [];
-  snapshot.forEach(doc => due.push({ id: doc.id, userId: doc.data().user_id, ...doc.data() }));
-  return due;
+  const stmt = sqliteDB.prepare(
+    'SELECT id, user_id, message, fire_at, created_at FROM reminders WHERE fire_at <= ? ORDER BY fire_at ASC'
+  );
+  return stmt.all(now).map(r => ({ ...r, id: String(r.id), userId: r.user_id }));
 }
 
 async function deleteFiredReminder(db, id) {
-  if (!firestoreDB) return;
-  await firestoreDB.collection('reminders').doc(String(id)).delete();
+  if (!sqliteDB) return;
+  sqliteDB.prepare('DELETE FROM reminders WHERE id = ?').run(String(id));
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
 async function upsertNote(db, userId, title, content) {
-  if (!firestoreDB) return;
-  const titleSlug = Buffer.from(title).toString('base64'); // Avoid invalid doc IDs
-  await getUserRef(userId).collection('notes').doc(titleSlug).set({
-    title,
-    content,
-    updated_at: Math.floor(Date.now() / 1000)
-  }, { merge: true });
+  if (!sqliteDB) return;
+  const titleSlug = Buffer.from(title).toString('base64');
+  const stmt = sqliteDB.prepare(
+    `INSERT INTO notes (user_id, title_slug, title, content, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, title_slug) DO UPDATE SET title = excluded.title, content = excluded.content, updated_at = excluded.updated_at`
+  );
+  stmt.run(String(userId), titleSlug, title, content, Math.floor(Date.now() / 1000));
 }
 
 async function getNotes(db, userId, search = null) {
-  if (!firestoreDB) return [];
-  const snapshot = await getUserRef(userId).collection('notes').orderBy('updated_at', 'desc').get();
-  const notes = [];
-  snapshot.forEach(doc => {
-    const data = doc.data();
-    if (!search || data.title.toLowerCase().includes(search.toLowerCase()) || data.content.toLowerCase().includes(search.toLowerCase())) {
-      notes.push({ id: doc.id, ...data });
-    }
-  });
-  return notes;
+  if (!sqliteDB) return [];
+  const stmt = sqliteDB.prepare(
+    'SELECT title_slug AS id, title, content, updated_at FROM notes WHERE user_id = ? ORDER BY updated_at DESC'
+  );
+  const rows = stmt.all(String(userId));
+  if (!search) return rows;
+  const lower = search.toLowerCase();
+  return rows.filter(r => r.title.toLowerCase().includes(lower) || r.content.toLowerCase().includes(lower));
 }
 
 async function deleteNote(db, userId, title) {
-  if (!firestoreDB) return false;
+  if (!sqliteDB) return false;
   const titleSlug = Buffer.from(title).toString('base64');
-  const docRef = getUserRef(userId).collection('notes').doc(titleSlug);
-  const doc = await docRef.get();
-  if (doc.exists) {
-    await docRef.delete();
-    return true;
-  }
-  return false;
+  const stmt = sqliteDB.prepare('DELETE FROM notes WHERE user_id = ? AND title_slug = ?');
+  const info = stmt.run(String(userId), titleSlug);
+  return info.changes > 0;
 }
 
 // ── Local storage ─────────────────────────────────────────────────────────────
 
 async function storageSet(db, userId, key, value) {
-  if (!firestoreDB) return;
-  await getUserRef(userId).collection('storage').doc(key).set({
-    value: String(value),
-    updated_at: Math.floor(Date.now() / 1000)
-  }, { merge: true });
+  if (!sqliteDB) return;
+  const stmt = sqliteDB.prepare(
+    `INSERT INTO storage (user_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+  );
+  stmt.run(String(userId), key, String(value), Math.floor(Date.now() / 1000));
 }
 
 async function storageGet(db, userId, key) {
-  if (!firestoreDB) return null;
-  const doc = await getUserRef(userId).collection('storage').doc(key).get();
-  return doc.exists ? doc.data().value : null;
+  if (!sqliteDB) return null;
+  const stmt = sqliteDB.prepare('SELECT value FROM storage WHERE user_id = ? AND key = ?');
+  const row = stmt.get(String(userId), key);
+  return row ? row.value : null;
 }
 
 async function storageDelete(db, userId, key) {
-  if (!firestoreDB) return false;
-  const docRef = getUserRef(userId).collection('storage').doc(key);
-  const doc = await docRef.get();
-  if (doc.exists) {
-    await docRef.delete();
-    return true;
-  }
-  return false;
+  if (!sqliteDB) return false;
+  const stmt = sqliteDB.prepare('DELETE FROM storage WHERE user_id = ? AND key = ?');
+  const info = stmt.run(String(userId), key);
+  return info.changes > 0;
 }
 
 async function storageList(db, userId) {
-  if (!firestoreDB) return [];
-  const snapshot = await getUserRef(userId).collection('storage').orderBy(admin.firestore.FieldPath.documentId()).get();
-  const items = [];
-  snapshot.forEach(doc => items.push({ key: doc.id, value: doc.data().value }));
-  return items;
+  if (!sqliteDB) return [];
+  const stmt = sqliteDB.prepare('SELECT key, value FROM storage WHERE user_id = ? ORDER BY key ASC');
+  return stmt.all(String(userId));
 }
 
 // ── Cron jobs ─────────────────────────────────────────────────────────────────
 
 async function addCronJob(db, userId, name, schedule, action, payload) {
-  if (!firestoreDB) return null;
+  if (!sqliteDB) return null;
   const nameSlug = Buffer.from(name).toString('base64');
   const idStr = `${userId}_${nameSlug}`;
-  await firestoreDB.collection('cron_jobs').doc(idStr).set({
-    user_id: userId,
-    name,
-    schedule,
-    action,
-    payload: JSON.stringify(payload),
-    enabled: 1,
-    created_at: Math.floor(Date.now() / 1000)
-  }, { merge: true });
+  const stmt = sqliteDB.prepare(
+    `INSERT INTO cron_jobs (id, user_id, name, schedule, action, payload, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, schedule = excluded.schedule, action = excluded.action, payload = excluded.payload, enabled = excluded.enabled, created_at = excluded.created_at`
+  );
+  stmt.run(idStr, String(userId), name, schedule, action, JSON.stringify(payload), Math.floor(Date.now() / 1000));
   return idStr;
 }
 
 async function listCronJobs(db, userId) {
-  if (!firestoreDB) return [];
-  const snapshot = await firestoreDB.collection('cron_jobs').where('user_id', '==', userId).get();
-  const jobs = [];
-  snapshot.forEach(doc => jobs.push({ id: doc.id, ...doc.data() }));
-  return jobs;
+  if (!sqliteDB) return [];
+  const stmt = sqliteDB.prepare('SELECT * FROM cron_jobs WHERE user_id = ?');
+  return stmt.all(String(userId));
 }
 
 async function deleteCronJob(db, userId, name) {
-  if (!firestoreDB) return false;
+  if (!sqliteDB) return false;
   const nameSlug = Buffer.from(name).toString('base64');
   const idStr = `${userId}_${nameSlug}`;
-  const docRef = firestoreDB.collection('cron_jobs').doc(idStr);
-  const doc = await docRef.get();
-  if (doc.exists && doc.data().user_id === userId) {
-    await docRef.delete();
-    return true;
-  }
-  return false;
+  const stmt = sqliteDB.prepare('DELETE FROM cron_jobs WHERE id = ? AND user_id = ?');
+  const info = stmt.run(idStr, String(userId));
+  return info.changes > 0;
 }
 
 async function getAllEnabledCrons(db) {
-  if (!firestoreDB) return [];
-  const snapshot = await firestoreDB.collection('cron_jobs').where('enabled', '==', 1).get();
-  const jobs = [];
-  snapshot.forEach(doc => jobs.push({ id: doc.id, ...doc.data() }));
-  return jobs;
+  if (!sqliteDB) return [];
+  const stmt = sqliteDB.prepare('SELECT * FROM cron_jobs WHERE enabled = 1');
+  return stmt.all();
 }
 
 // ── Health checks ─────────────────────────────────────────────────────────────
 
 async function addHealthCheck(db, userId, name, url, intervalMinutes = 5) {
-  if (!firestoreDB) return;
+  if (!sqliteDB) return;
   const nameSlug = Buffer.from(name).toString('base64');
   const idStr = `${userId}_${nameSlug}`;
-  await firestoreDB.collection('health_checks').doc(idStr).set({
-    user_id: userId,
-    name,
-    url,
-    interval_minutes: intervalMinutes,
-    enabled: 1
-  }, { merge: true });
+  const stmt = sqliteDB.prepare(
+    `INSERT INTO health_checks (id, user_id, name, url, interval_minutes, enabled) VALUES (?, ?, ?, ?, ?, 1)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, interval_minutes = excluded.interval_minutes, enabled = excluded.enabled`
+  );
+  stmt.run(idStr, String(userId), name, url, intervalMinutes);
 }
 
 async function listHealthChecks(db, userId) {
-  if (!firestoreDB) return [];
-  const snapshot = await firestoreDB.collection('health_checks').where('user_id', '==', userId).get();
-  const checks = [];
-  snapshot.forEach(doc => checks.push({ id: doc.id, ...doc.data() }));
-  return checks;
+  if (!sqliteDB) return [];
+  const stmt = sqliteDB.prepare('SELECT * FROM health_checks WHERE user_id = ?');
+  return stmt.all(String(userId));
 }
 
 async function deleteHealthCheck(db, userId, name) {
-  if (!firestoreDB) return false;
+  if (!sqliteDB) return false;
   const nameSlug = Buffer.from(name).toString('base64');
   const idStr = `${userId}_${nameSlug}`;
-  const docRef = firestoreDB.collection('health_checks').doc(idStr);
-  const doc = await docRef.get();
-  if (doc.exists && doc.data().user_id === userId) {
-    await docRef.delete();
-    return true;
-  }
-  return false;
+  const stmt = sqliteDB.prepare('DELETE FROM health_checks WHERE id = ? AND user_id = ?');
+  const info = stmt.run(idStr, String(userId));
+  return info.changes > 0;
 }
 
 async function getHealthChecksToRun(db) {
-  if (!firestoreDB) return [];
+  if (!sqliteDB) return [];
   const now = Math.floor(Date.now() / 1000);
-  const snapshot = await firestoreDB.collection('health_checks').where('enabled', '==', 1).get();
-  const checks = [];
-  snapshot.forEach(doc => {
-    const data = doc.data();
-    if (!data.last_checked || data.last_checked + data.interval_minutes * 60 <= now) {
-      checks.push({ id: doc.id, ...data });
-    }
-  });
-  return checks;
+  const stmt = sqliteDB.prepare(
+    'SELECT * FROM health_checks WHERE enabled = 1 AND (last_checked IS NULL OR last_checked + interval_minutes * 60 <= ?)'
+  );
+  return stmt.all(now);
 }
 
 async function updateHealthCheckStatus(db, id, status) {
-  if (!firestoreDB) return;
-  await firestoreDB.collection('health_checks').doc(String(id)).update({
-    last_checked: Math.floor(Date.now() / 1000),
-    last_status: status
-  });
+  if (!sqliteDB) return;
+  const stmt = sqliteDB.prepare(
+    'UPDATE health_checks SET last_checked = ?, last_status = ? WHERE id = ?'
+  );
+  stmt.run(Math.floor(Date.now() / 1000), status, String(id));
 }
 
 // ── API metrics ────────────────────────────────────────────────────────────────
 
 async function logApiCall(db, model, tokensIn, tokensOut) {
-  if (!firestoreDB) return;
-  await firestoreDB.collection('api_metrics').add({
-    model,
-    tokens_in: tokensIn || 0,
-    tokens_out: tokensOut || 0,
-    timestamp: Math.floor(Date.now() / 1000)
-  });
+  if (!sqliteDB) return;
+  const stmt = sqliteDB.prepare(
+    'INSERT INTO api_metrics (model, tokens_in, tokens_out, timestamp) VALUES (?, ?, ?, ?)'
+  );
+  stmt.run(model, tokensIn || 0, tokensOut || 0, Math.floor(Date.now() / 1000));
 }
 
 async function getApiUsageSummary(db, days = 7) {
-  if (!firestoreDB) return [];
+  if (!sqliteDB) return [];
   const since = Math.floor(Date.now() / 1000) - days * 86400;
-  const snapshot = await firestoreDB.collection('api_metrics').where('timestamp', '>=', since).get();
-  const aggregated = {};
-  snapshot.forEach(doc => {
-    const data = doc.data();
-    if (!aggregated[data.model]) {
-      aggregated[data.model] = { model: data.model, calls: 0, tokens_in: 0, tokens_out: 0 };
-    }
-    aggregated[data.model].calls++;
-    aggregated[data.model].tokens_in += data.tokens_in;
-    aggregated[data.model].tokens_out += data.tokens_out;
-  });
-  return Object.values(aggregated);
+  const stmt = sqliteDB.prepare(
+    `SELECT model, COUNT(*) as calls, SUM(tokens_in) as tokens_in, SUM(tokens_out) as tokens_out
+     FROM api_metrics WHERE timestamp >= ? GROUP BY model`
+  );
+  return stmt.all(since);
 }
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
 async function checkAndIncrementRateLimit(db, userId, limitPerHour) {
-  if (!firestoreDB) return true; // Fail open if no DB
+  if (!sqliteDB) return true; // Fail open if no DB
   if (limitPerHour === 0) return true; // Unlimited
 
   const windowStart = String(Math.floor(Date.now() / 3600000) * 3600);
-  const rateLimitRef = getUserRef(userId).collection('rate_limits').doc(windowStart);
 
   try {
-    return await firestoreDB.runTransaction(async (transaction) => {
-      const doc = await transaction.get(rateLimitRef);
-      if (!doc.exists) {
-        transaction.set(rateLimitRef, { count: 1 });
+    const result = sqliteDB.transaction(() => {
+      const row = sqliteDB.prepare(
+        'SELECT count FROM rate_limits WHERE user_id = ? AND window_start = ?'
+      ).get(String(userId), windowStart);
+
+      if (!row) {
+        sqliteDB.prepare(
+          'INSERT INTO rate_limits (user_id, window_start, count) VALUES (?, ?, 1)'
+        ).run(String(userId), windowStart);
         return true;
       }
-      const count = doc.data().count;
-      if (count < limitPerHour) {
-        transaction.update(rateLimitRef, { count: count + 1 });
+      if (row.count < limitPerHour) {
+        sqliteDB.prepare(
+          'UPDATE rate_limits SET count = count + 1 WHERE user_id = ? AND window_start = ?'
+        ).run(String(userId), windowStart);
         return true;
       }
       return false;
-    });
+    })();
+    return result;
   } catch (e) {
-    console.error('[firebase] Rate limit transaction failed', e);
+    console.error('[db] Rate limit transaction failed', e);
     return true; // Fail open
   }
 }
 
-// ── Google OAuth Tokens (Firebase) ─────────────────────────────────────────────
+// ── Google OAuth Tokens ─────────────────────────────────────────────────────────
 
 async function saveGoogleTokens(db, userId, tokens) {
-  if (!firestoreDB) {
-    console.error(`[firebase] Firestore not initialized - cannot save tokens for user ${userId}`);
+  if (!sqliteDB) {
+    console.error(`[db] SQLite not initialized - cannot save tokens for user ${userId}`);
     return false;
   }
 
   try {
-    const updateData = {
-      updated_at: admin.firestore.FieldValue.serverTimestamp()
-    };
-    if (tokens.access_token) updateData.access_token = tokens.access_token;
-    if (typeof tokens.expiry_date === 'number') updateData.expiry_date = tokens.expiry_date;
-    if (tokens.refresh_token) {
-      updateData.refresh_token = tokens.refresh_token;
-    }
-    if (tokens.scope) {
-      updateData.scope = String(tokens.scope);
-    }
-    if (tokens.token_type) {
-      updateData.token_type = String(tokens.token_type);
-    }
+    const existing = sqliteDB.prepare('SELECT user_id FROM google_auth WHERE user_id = ?').get(String(userId));
 
-    // Save as subcollection under users collection: users/{userId}/google_auth/{docId}
-    await getUserRef(userId).collection('google_auth').doc('tokens').set(updateData, { merge: true });
+    if (existing) {
+      const sets = ['updated_at = ?'];
+      const values = [Math.floor(Date.now() / 1000)];
+      if (tokens.access_token) { sets.push('access_token = ?'); values.push(tokens.access_token); }
+      if (typeof tokens.expiry_date === 'number') { sets.push('expiry_date = ?'); values.push(tokens.expiry_date); }
+      if (tokens.refresh_token) { sets.push('refresh_token = ?'); values.push(tokens.refresh_token); }
+      if (tokens.scope) { sets.push('scope = ?'); values.push(String(tokens.scope)); }
+      if (tokens.token_type) { sets.push('token_type = ?'); values.push(String(tokens.token_type)); }
+      values.push(String(userId));
+      sqliteDB.prepare(`UPDATE google_auth SET ${sets.join(', ')} WHERE user_id = ?`).run(...values);
+    } else {
+      sqliteDB.prepare(
+        `INSERT INTO google_auth (user_id, access_token, refresh_token, expiry_date, scope, token_type, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        String(userId),
+        tokens.access_token || null,
+        tokens.refresh_token || null,
+        typeof tokens.expiry_date === 'number' ? tokens.expiry_date : null,
+        tokens.scope ? String(tokens.scope) : null,
+        tokens.token_type ? String(tokens.token_type) : null,
+        Math.floor(Date.now() / 1000)
+      );
+    }
     return true;
   } catch (error) {
-    console.error(`[firebase] Error saving tokens for user ${userId}:`, error);
+    console.error(`[db] Error saving tokens for user ${userId}:`, error);
     return false;
   }
 }
 
 async function getGoogleTokens(db, userId) {
-  if (!firestoreDB) {
-    console.error(`[firebase] Firestore not initialized - cannot get tokens for user ${userId}`);
+  if (!sqliteDB) {
+    console.error(`[db] SQLite not initialized - cannot get tokens for user ${userId}`);
     return null;
   }
 
   try {
-    // Read from users/{userId}/google_auth/tokens subcollection
-    const docRef = getUserRef(userId).collection('google_auth').doc('tokens');
-    const doc = await docRef.get();
-
-    if (doc.exists) {
-      const tokenData = doc.data();
-
-      if (tokenData.access_token || tokenData.refresh_token) {
-        return {
-          access_token: tokenData.access_token,
-          refresh_token: tokenData.refresh_token,
-          expiry_date: tokenData.expiry_date,
-          scope: tokenData.scope,
-          token_type: tokenData.token_type,
-        };
-      }
-      return null;
-    }
-    return null;
+    const row = sqliteDB.prepare('SELECT * FROM google_auth WHERE user_id = ?').get(String(userId));
+    if (!row) return null;
+    if (!row.access_token && !row.refresh_token) return null;
+    return {
+      access_token: row.access_token,
+      refresh_token: row.refresh_token,
+      expiry_date: row.expiry_date,
+      scope: row.scope,
+      token_type: row.token_type,
+    };
   } catch (error) {
-    console.error(`[firebase] Error getting tokens for user ${userId}:`, error);
+    console.error(`[db] Error getting tokens for user ${userId}:`, error);
     return null;
   }
 }
 
+// ── Webhooks (used by webhook.js) ──────────────────────────────────────────────
+
+async function getWebhook(token) {
+  if (!sqliteDB) return null;
+  return sqliteDB.prepare('SELECT * FROM webhooks WHERE token = ?').get(token) || null;
+}
+
+async function createWebhook(userId, name, token, description = '') {
+  if (!sqliteDB) return;
+  sqliteDB.prepare(
+    'INSERT INTO webhooks (token, user_id, name, description, enabled, created_at) VALUES (?, ?, ?, ?, 1, ?)'
+  ).run(token, String(userId), name, description, Math.floor(Date.now() / 1000));
+}
+
+async function removeWebhooks(userId, name) {
+  if (!sqliteDB) return false;
+  const info = sqliteDB.prepare('DELETE FROM webhooks WHERE user_id = ? AND name = ?').run(String(userId), name);
+  return info.changes > 0;
+}
+
+async function listWebhooksByUser(userId) {
+  if (!sqliteDB) return [];
+  return sqliteDB.prepare('SELECT * FROM webhooks WHERE user_id = ? AND enabled = 1').all(String(userId));
+}
+
+// ── Audit log ─────────────────────────────────────────────────────────────────
+
+async function logAuditEvent(userId, action, detail = '') {
+  if (!sqliteDB) return;
+  sqliteDB.prepare(
+    'INSERT INTO audit_log (user_id, action, detail, timestamp) VALUES (?, ?, ?, ?)'
+  ).run(String(userId), action, detail, Math.floor(Date.now() / 1000));
+}
+
+async function getAuditLog(userId, limit = 50) {
+  if (!sqliteDB) return [];
+  const stmt = sqliteDB.prepare(
+    'SELECT * FROM audit_log WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?'
+  );
+  return stmt.all(String(userId), limit);
+}
+
+// ── Metrics insert helpers (used by llm.js and tools.js instead of raw db.collection) ──
+
+async function logAgentGuardMetric(eventType, payload = {}) {
+  if (!sqliteDB) return;
+  try {
+    sqliteDB.prepare(
+      'INSERT INTO agent_guard_metrics (event_type, payload, created_at) VALUES (?, ?, ?)'
+    ).run(eventType, JSON.stringify(payload), Math.floor(Date.now() / 1000));
+  } catch { /* best-effort */ }
+}
+
+async function logGoogleToolMetric(userId, service, action, status, errorCategory = '') {
+  if (!sqliteDB) return;
+  try {
+    sqliteDB.prepare(
+      'INSERT INTO google_tool_metrics (user_id, service, action, status, error_category, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(String(userId), service, action, status, errorCategory || null, Math.floor(Date.now() / 1000));
+  } catch { /* best-effort */ }
+}
+
+// ── Rate limit cleanup ───────────────────────────────────────────────────────
+
+async function cleanupOldRateLimits() {
+  if (!sqliteDB) return;
+  const cutoff = String(Math.floor(Date.now() / 1000) - 86400 * 7);
+  sqliteDB.prepare('DELETE FROM rate_limits WHERE window_start < ?').run(cutoff);
+}
+
+// ── Close database ───────────────────────────────────────────────────────────
+
+function closeDb() {
+  if (sqliteDB) {
+    sqliteDB.close();
+    sqliteDB = null;
+  }
+}
+
 module.exports = {
-  initDb,
+  initDb, closeDb,
   saveMemory, getRecentMemories,
   upsertFact, getAllFacts,
   addReminder, getPendingReminders, deleteReminder, getDueReminders, deleteFiredReminder,
@@ -452,4 +594,8 @@ module.exports = {
   logApiCall, getApiUsageSummary,
   checkAndIncrementRateLimit,
   saveGoogleTokens, getGoogleTokens,
+  getWebhook, createWebhook, removeWebhooks, listWebhooksByUser,
+  logAuditEvent, getAuditLog,
+  logAgentGuardMetric, logGoogleToolMetric,
+  cleanupOldRateLimits,
 };
