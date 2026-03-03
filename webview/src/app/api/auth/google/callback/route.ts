@@ -4,6 +4,49 @@ import { verifySignedOAuthState } from '@/lib/oauth-state';
 import { successResponse, errorResponse } from '@/lib/html-response';
 import * as admin from 'firebase-admin';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function saveTokensToDatabase(userId: string, tokens: any) {
+    if (!db) {
+        throw new Error('Firebase DB is not initialized! Could not save tokens.');
+    }
+
+    const docRef = db.collection('users').doc(userId).collection('google_auth').doc('tokens');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (tokens.access_token) {
+        updateData.access_token = tokens.access_token;
+    }
+    if (typeof tokens.expiry_date === 'number') {
+        updateData.expiry_date = tokens.expiry_date;
+    }
+    if (tokens.refresh_token) {
+        updateData.refresh_token = tokens.refresh_token;
+    }
+    if (tokens.scope) {
+        updateData.scope = tokens.scope;
+    }
+    if (tokens.token_type) {
+        updateData.token_type = tokens.token_type;
+    }
+
+    await docRef.set(updateData, { merge: true });
+
+    // Verify the save worked
+    const savedDoc = await docRef.get();
+    if (savedDoc.exists) {
+        const savedData = savedDoc.data();
+        if (savedData && typeof savedData === 'object') {
+        } else {
+            console.error('[Google Callback] Verification - Document data is undefined or not an object');
+        }
+    } else {
+        console.error('[Google Callback] Verification - Document not found after save!');
+    }
+}
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const { searchParams } = url;
@@ -35,46 +78,7 @@ export async function GET(request: Request) {
         const oauth2Client = getOAuth2Client(url.origin);
         const { tokens } = await oauth2Client.getToken(code);
 
-        if (!db) {
-            console.error('[Google Callback] Firebase DB is not initialized! Could not save tokens.');
-            return errorResponse('Database Error', 'Database is not configured to save tokens.', 500);
-        }
-
-        const docRef = db.collection('users').doc(stateCheck.userId).collection('google_auth').doc('tokens');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updateData: any = {
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-        };
-
-        if (tokens.access_token) {
-            updateData.access_token = tokens.access_token;
-        }
-        if (typeof tokens.expiry_date === 'number') {
-            updateData.expiry_date = tokens.expiry_date;
-        }
-        if (tokens.refresh_token) {
-            updateData.refresh_token = tokens.refresh_token;
-        }
-        if (tokens.scope) {
-            updateData.scope = tokens.scope;
-        }
-        if (tokens.token_type) {
-            updateData.token_type = tokens.token_type;
-        }
-
-        await docRef.set(updateData, { merge: true });
-
-        // Verify the save worked
-        const savedDoc = await docRef.get();
-        if (savedDoc.exists) {
-            const savedData = savedDoc.data();
-            if (savedData && typeof savedData === 'object') {
-            } else {
-                console.error('[Google Callback] Verification - Document data is undefined or not an object');
-            }
-        } else {
-            console.error('[Google Callback] Verification - Document not found after save!');
-        }
+        await saveTokensToDatabase(stateCheck.userId, tokens);
 
         // After success, we can redirect back to Telegram or show a success page
         // Using a telegram deep link to close the web app:
@@ -82,6 +86,11 @@ export async function GET(request: Request) {
     } catch (err) {
         console.error('[Google Callback] Error in google callback:', err);
         console.error('[Google Callback] Error stack:', err instanceof Error ? err.stack : 'No stack trace');
+
+        if (err instanceof Error && err.message.includes('Firebase DB is not initialized')) {
+            return errorResponse('Database Error', 'Database is not configured to save tokens.', 500);
+        }
+
         return errorResponse('Authorization Failed', 'Internal Server Error during authorization.', 500);
     }
 }
