@@ -5,3 +5,6 @@
 ## 2025-03-08 - Replace transient chat status messages with final states
 **Learning:** Sending a "processing" message followed by a separate "done" message creates unnecessary clutter in conversational interfaces, pushing context out of view.
 **Action:** When performing async actions in chat UIs (like file uploads), capture the ID of the initial status message and use the platform's `editMessageText` method to update it with the final outcome instead of appending new messages.
+## 2025-03-08 - Use styled HTML for WebApp errors
+**Learning:** Returning plain text error messages from Telegram WebApp API routes strands users in a broken state. Emojis and characters can render incorrectly if `<meta charset="utf-8">` is missing.
+**Action:** Always return styled HTML with proper charset encoding and explicit window closing logic (`window.close()` and `Telegram.WebApp.close()`) for terminal states in WebApps.
