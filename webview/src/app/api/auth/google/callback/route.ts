@@ -4,6 +4,15 @@ import { db } from '@/lib/firebase';
 import { verifySignedOAuthState } from '@/lib/oauth-state';
 import * as admin from 'firebase-admin';
 
+function escapeHtml(unsafe: string) {
+    return String(unsafe)
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
+}
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const { searchParams } = url;
@@ -13,7 +22,7 @@ export async function GET(request: Request) {
 
     if (error) {
         console.error('[Google Callback] Auth error:', error);
-        return new NextResponse(`Auth error: ${error}`, { status: 400 });
+        return new NextResponse(`Auth error: ${escapeHtml(error)}`, { status: 400 });
     }
     if (!code || !state) {
         console.error('[Google Callback] Missing parameters:', { hasCode: !!code, hasState: !!state });
