@@ -163,18 +163,30 @@ function initDb() {
   }
 }
 
+// ── Statement Cache Helper ─────────────────────────────────────────────────────
+
+function getStmt(db, sql) {
+  db._statements = db._statements || new Map();
+  let stmt = db._statements.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    db._statements.set(sql, stmt);
+  }
+  return stmt;
+}
+
 // ── Conversation memory ────────────────────────────────────────────────────────
 
 async function saveMemory(db, userId, content) {
   if (!sqliteDB) return;
-  const stmt = sqliteDB.prepare('INSERT INTO memory (user_id, content, timestamp) VALUES (?, ?, ?)');
+  const stmt = getStmt(sqliteDB, 'INSERT INTO memory (user_id, content, timestamp) VALUES (?, ?, ?)');
   stmt.run(String(userId), content, Math.floor(Date.now() / 1000));
 }
 
 async function getRecentMemories(db, userId, limit) {
   if (!sqliteDB) return [];
   const count = limit || parseInt(process.env.MEMORY_TURNS || '20', 10);
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'SELECT content FROM memory WHERE user_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?'
   );
   const rows = stmt.all(String(userId), count);
@@ -186,7 +198,7 @@ async function getRecentMemories(db, userId, limit) {
 async function upsertFact(db, userId, key, value) {
   if (!sqliteDB) return;
   const factKey = key.trim().toLowerCase();
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'INSERT INTO facts (user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value'
   );
   stmt.run(String(userId), factKey, String(value).trim());
@@ -194,7 +206,7 @@ async function upsertFact(db, userId, key, value) {
 
 async function getAllFacts(db, userId) {
   if (!sqliteDB) return {};
-  const stmt = sqliteDB.prepare('SELECT key, value FROM facts WHERE user_id = ?');
+  const stmt = getStmt(sqliteDB, 'SELECT key, value FROM facts WHERE user_id = ?');
   const rows = stmt.all(String(userId));
   const facts = {};
   for (const row of rows) facts[row.key] = row.value;
