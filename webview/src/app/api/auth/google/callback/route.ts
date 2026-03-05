@@ -3,6 +3,7 @@ import { getOAuth2Client } from '@/lib/google';
 import { db } from '@/lib/firebase';
 import { verifySignedOAuthState } from '@/lib/oauth-state';
 import * as admin from 'firebase-admin';
+import { escapeHtml } from '@/lib/escape';
 
 export async function GET(request: Request) {
     const url = new URL(request.url);
@@ -13,7 +14,7 @@ export async function GET(request: Request) {
 
     if (error) {
         console.error('[Google Callback] Auth error:', error);
-        return new NextResponse(`Auth error: ${error}`, { status: 400 });
+        return new NextResponse(`Auth error: ${escapeHtml(error)}`, { status: 400 });
     }
     if (!code || !state) {
         console.error('[Google Callback] Missing parameters:', { hasCode: !!code, hasState: !!state });
