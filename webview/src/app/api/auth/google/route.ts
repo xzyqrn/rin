@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAuthUrl } from '@/lib/google';
 import { verifySignedOAuthState } from '@/lib/oauth-state';
+import { escapeHtml } from '@/lib/escape';
 
 export async function GET(request: Request) {
     const url = new URL(request.url);
@@ -29,6 +30,6 @@ export async function GET(request: Request) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error('[Google Auth] Setup incomplete:', message);
         console.error('[Google Auth] Error details:', error);
-        return new NextResponse(`Setup incomplete: ${message}`, { status: 500 });
+        return new NextResponse(`Setup incomplete: ${escapeHtml(message)}`, { status: 500 });
     }
 }
