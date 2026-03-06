@@ -7,6 +7,14 @@ const DB_PATH = process.env.SQLITE_DB_PATH || path.join(__dirname, '..', 'data',
 
 let sqliteDB = null;
 
+function getStmt(db, sql) {
+  if (!db._statements) db._statements = {};
+  if (!db._statements[sql]) {
+    db._statements[sql] = db.prepare(sql);
+  }
+  return db._statements[sql];
+}
+
 function _ensureDir(filePath) {
   const fs = require('fs');
   const dir = path.dirname(filePath);
@@ -167,14 +175,14 @@ function initDb() {
 
 async function saveMemory(db, userId, content) {
   if (!sqliteDB) return;
-  const stmt = sqliteDB.prepare('INSERT INTO memory (user_id, content, timestamp) VALUES (?, ?, ?)');
+  const stmt = getStmt(sqliteDB, 'INSERT INTO memory (user_id, content, timestamp) VALUES (?, ?, ?)');
   stmt.run(String(userId), content, Math.floor(Date.now() / 1000));
 }
 
 async function getRecentMemories(db, userId, limit) {
   if (!sqliteDB) return [];
   const count = limit || parseInt(process.env.MEMORY_TURNS || '20', 10);
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'SELECT content FROM memory WHERE user_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?'
   );
   const rows = stmt.all(String(userId), count);
@@ -186,7 +194,7 @@ async function getRecentMemories(db, userId, limit) {
 async function upsertFact(db, userId, key, value) {
   if (!sqliteDB) return;
   const factKey = key.trim().toLowerCase();
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'INSERT INTO facts (user_id, key, value) VALUES (?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value'
   );
   stmt.run(String(userId), factKey, String(value).trim());
@@ -194,7 +202,7 @@ async function upsertFact(db, userId, key, value) {
 
 async function getAllFacts(db, userId) {
   if (!sqliteDB) return {};
-  const stmt = sqliteDB.prepare('SELECT key, value FROM facts WHERE user_id = ?');
+  const stmt = getStmt(sqliteDB, 'SELECT key, value FROM facts WHERE user_id = ?');
   const rows = stmt.all(String(userId));
   const facts = {};
   for (const row of rows) facts[row.key] = row.value;
@@ -205,7 +213,7 @@ async function getAllFacts(db, userId) {
 
 async function addReminder(db, userId, message, fireAt) {
   if (!sqliteDB) return 0;
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'INSERT INTO reminders (user_id, message, fire_at, created_at) VALUES (?, ?, ?, ?)'
   );
   const info = stmt.run(String(userId), message, fireAt, Math.floor(Date.now() / 1000));
@@ -214,7 +222,7 @@ async function addReminder(db, userId, message, fireAt) {
 
 async function getPendingReminders(db, userId) {
   if (!sqliteDB) return [];
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'SELECT id, user_id, message, fire_at, created_at FROM reminders WHERE user_id = ? ORDER BY fire_at ASC'
   );
   return stmt.all(String(userId)).map(r => ({ ...r, id: String(r.id) }));
@@ -222,7 +230,7 @@ async function getPendingReminders(db, userId) {
 
 async function deleteReminder(db, userId, id) {
   if (!sqliteDB) return false;
-  const stmt = sqliteDB.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?');
+  const stmt = getStmt(sqliteDB, 'DELETE FROM reminders WHERE id = ? AND user_id = ?');
   const info = stmt.run(String(id), String(userId));
   return info.changes > 0;
 }
@@ -230,7 +238,7 @@ async function deleteReminder(db, userId, id) {
 async function getDueReminders(db) {
   if (!sqliteDB) return [];
   const now = Math.floor(Date.now() / 1000);
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'SELECT id, user_id, message, fire_at, created_at FROM reminders WHERE fire_at <= ? ORDER BY fire_at ASC'
   );
   return stmt.all(now).map(r => ({ ...r, id: String(r.id), userId: r.user_id }));
@@ -238,7 +246,7 @@ async function getDueReminders(db) {
 
 async function deleteFiredReminder(db, id) {
   if (!sqliteDB) return;
-  sqliteDB.prepare('DELETE FROM reminders WHERE id = ?').run(String(id));
+  getStmt(sqliteDB, 'DELETE FROM reminders WHERE id = ?').run(String(id));
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
@@ -246,7 +254,7 @@ async function deleteFiredReminder(db, id) {
 async function upsertNote(db, userId, title, content) {
   if (!sqliteDB) return;
   const titleSlug = Buffer.from(title).toString('base64');
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     `INSERT INTO notes (user_id, title_slug, title, content, updated_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(user_id, title_slug) DO UPDATE SET title = excluded.title, content = excluded.content, updated_at = excluded.updated_at`
   );
@@ -255,7 +263,7 @@ async function upsertNote(db, userId, title, content) {
 
 async function getNotes(db, userId, search = null) {
   if (!sqliteDB) return [];
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'SELECT title_slug AS id, title, content, updated_at FROM notes WHERE user_id = ? ORDER BY updated_at DESC'
   );
   const rows = stmt.all(String(userId));
@@ -267,7 +275,7 @@ async function getNotes(db, userId, search = null) {
 async function deleteNote(db, userId, title) {
   if (!sqliteDB) return false;
   const titleSlug = Buffer.from(title).toString('base64');
-  const stmt = sqliteDB.prepare('DELETE FROM notes WHERE user_id = ? AND title_slug = ?');
+  const stmt = getStmt(sqliteDB, 'DELETE FROM notes WHERE user_id = ? AND title_slug = ?');
   const info = stmt.run(String(userId), titleSlug);
   return info.changes > 0;
 }
@@ -276,7 +284,7 @@ async function deleteNote(db, userId, title) {
 
 async function storageSet(db, userId, key, value) {
   if (!sqliteDB) return;
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     `INSERT INTO storage (user_id, key, value, updated_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
   );
@@ -285,21 +293,21 @@ async function storageSet(db, userId, key, value) {
 
 async function storageGet(db, userId, key) {
   if (!sqliteDB) return null;
-  const stmt = sqliteDB.prepare('SELECT value FROM storage WHERE user_id = ? AND key = ?');
+  const stmt = getStmt(sqliteDB, 'SELECT value FROM storage WHERE user_id = ? AND key = ?');
   const row = stmt.get(String(userId), key);
   return row ? row.value : null;
 }
 
 async function storageDelete(db, userId, key) {
   if (!sqliteDB) return false;
-  const stmt = sqliteDB.prepare('DELETE FROM storage WHERE user_id = ? AND key = ?');
+  const stmt = getStmt(sqliteDB, 'DELETE FROM storage WHERE user_id = ? AND key = ?');
   const info = stmt.run(String(userId), key);
   return info.changes > 0;
 }
 
 async function storageList(db, userId) {
   if (!sqliteDB) return [];
-  const stmt = sqliteDB.prepare('SELECT key, value FROM storage WHERE user_id = ? ORDER BY key ASC');
+  const stmt = getStmt(sqliteDB, 'SELECT key, value FROM storage WHERE user_id = ? ORDER BY key ASC');
   return stmt.all(String(userId));
 }
 
@@ -309,7 +317,7 @@ async function addCronJob(db, userId, name, schedule, action, payload) {
   if (!sqliteDB) return null;
   const nameSlug = Buffer.from(name).toString('base64');
   const idStr = `${userId}_${nameSlug}`;
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     `INSERT INTO cron_jobs (id, user_id, name, schedule, action, payload, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, schedule = excluded.schedule, action = excluded.action, payload = excluded.payload, enabled = excluded.enabled, created_at = excluded.created_at`
   );
@@ -319,7 +327,7 @@ async function addCronJob(db, userId, name, schedule, action, payload) {
 
 async function listCronJobs(db, userId) {
   if (!sqliteDB) return [];
-  const stmt = sqliteDB.prepare('SELECT * FROM cron_jobs WHERE user_id = ?');
+  const stmt = getStmt(sqliteDB, 'SELECT * FROM cron_jobs WHERE user_id = ?');
   return stmt.all(String(userId));
 }
 
@@ -327,14 +335,14 @@ async function deleteCronJob(db, userId, name) {
   if (!sqliteDB) return false;
   const nameSlug = Buffer.from(name).toString('base64');
   const idStr = `${userId}_${nameSlug}`;
-  const stmt = sqliteDB.prepare('DELETE FROM cron_jobs WHERE id = ? AND user_id = ?');
+  const stmt = getStmt(sqliteDB, 'DELETE FROM cron_jobs WHERE id = ? AND user_id = ?');
   const info = stmt.run(idStr, String(userId));
   return info.changes > 0;
 }
 
 async function getAllEnabledCrons(db) {
   if (!sqliteDB) return [];
-  const stmt = sqliteDB.prepare('SELECT * FROM cron_jobs WHERE enabled = 1');
+  const stmt = getStmt(sqliteDB, 'SELECT * FROM cron_jobs WHERE enabled = 1');
   return stmt.all();
 }
 
@@ -344,7 +352,7 @@ async function addHealthCheck(db, userId, name, url, intervalMinutes = 5) {
   if (!sqliteDB) return;
   const nameSlug = Buffer.from(name).toString('base64');
   const idStr = `${userId}_${nameSlug}`;
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     `INSERT INTO health_checks (id, user_id, name, url, interval_minutes, enabled) VALUES (?, ?, ?, ?, ?, 1)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, interval_minutes = excluded.interval_minutes, enabled = excluded.enabled`
   );
@@ -353,7 +361,7 @@ async function addHealthCheck(db, userId, name, url, intervalMinutes = 5) {
 
 async function listHealthChecks(db, userId) {
   if (!sqliteDB) return [];
-  const stmt = sqliteDB.prepare('SELECT * FROM health_checks WHERE user_id = ?');
+  const stmt = getStmt(sqliteDB, 'SELECT * FROM health_checks WHERE user_id = ?');
   return stmt.all(String(userId));
 }
 
@@ -361,7 +369,7 @@ async function deleteHealthCheck(db, userId, name) {
   if (!sqliteDB) return false;
   const nameSlug = Buffer.from(name).toString('base64');
   const idStr = `${userId}_${nameSlug}`;
-  const stmt = sqliteDB.prepare('DELETE FROM health_checks WHERE id = ? AND user_id = ?');
+  const stmt = getStmt(sqliteDB, 'DELETE FROM health_checks WHERE id = ? AND user_id = ?');
   const info = stmt.run(idStr, String(userId));
   return info.changes > 0;
 }
@@ -369,7 +377,7 @@ async function deleteHealthCheck(db, userId, name) {
 async function getHealthChecksToRun(db) {
   if (!sqliteDB) return [];
   const now = Math.floor(Date.now() / 1000);
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'SELECT * FROM health_checks WHERE enabled = 1 AND (last_checked IS NULL OR last_checked + interval_minutes * 60 <= ?)'
   );
   return stmt.all(now);
@@ -377,7 +385,7 @@ async function getHealthChecksToRun(db) {
 
 async function updateHealthCheckStatus(db, id, status) {
   if (!sqliteDB) return;
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'UPDATE health_checks SET last_checked = ?, last_status = ? WHERE id = ?'
   );
   stmt.run(Math.floor(Date.now() / 1000), status, String(id));
@@ -387,7 +395,7 @@ async function updateHealthCheckStatus(db, id, status) {
 
 async function logApiCall(db, model, tokensIn, tokensOut) {
   if (!sqliteDB) return;
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'INSERT INTO api_metrics (model, tokens_in, tokens_out, timestamp) VALUES (?, ?, ?, ?)'
   );
   stmt.run(model, tokensIn || 0, tokensOut || 0, Math.floor(Date.now() / 1000));
@@ -396,7 +404,7 @@ async function logApiCall(db, model, tokensIn, tokensOut) {
 async function getApiUsageSummary(db, days = 7) {
   if (!sqliteDB) return [];
   const since = Math.floor(Date.now() / 1000) - days * 86400;
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     `SELECT model, COUNT(*) as calls, SUM(tokens_in) as tokens_in, SUM(tokens_out) as tokens_out
      FROM api_metrics WHERE timestamp >= ? GROUP BY model`
   );
@@ -413,18 +421,18 @@ async function checkAndIncrementRateLimit(db, userId, limitPerHour) {
 
   try {
     const result = sqliteDB.transaction(() => {
-      const row = sqliteDB.prepare(
+      const row = getStmt(sqliteDB,
         'SELECT count FROM rate_limits WHERE user_id = ? AND window_start = ?'
       ).get(String(userId), windowStart);
 
       if (!row) {
-        sqliteDB.prepare(
+        getStmt(sqliteDB,
           'INSERT INTO rate_limits (user_id, window_start, count) VALUES (?, ?, 1)'
         ).run(String(userId), windowStart);
         return true;
       }
       if (row.count < limitPerHour) {
-        sqliteDB.prepare(
+        getStmt(sqliteDB,
           'UPDATE rate_limits SET count = count + 1 WHERE user_id = ? AND window_start = ?'
         ).run(String(userId), windowStart);
         return true;
@@ -447,7 +455,7 @@ async function saveGoogleTokens(db, userId, tokens) {
   }
 
   try {
-    const existing = sqliteDB.prepare('SELECT user_id FROM google_auth WHERE user_id = ?').get(String(userId));
+    const existing = getStmt(sqliteDB, 'SELECT user_id FROM google_auth WHERE user_id = ?').get(String(userId));
 
     if (existing) {
       const sets = ['updated_at = ?'];
@@ -460,7 +468,7 @@ async function saveGoogleTokens(db, userId, tokens) {
       values.push(String(userId));
       sqliteDB.prepare(`UPDATE google_auth SET ${sets.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      sqliteDB.prepare(
+      getStmt(sqliteDB,
         `INSERT INTO google_auth (user_id, access_token, refresh_token, expiry_date, scope, token_type, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
       ).run(
@@ -487,7 +495,7 @@ async function getGoogleTokens(db, userId) {
   }
 
   try {
-    const row = sqliteDB.prepare('SELECT * FROM google_auth WHERE user_id = ?').get(String(userId));
+    const row = getStmt(sqliteDB, 'SELECT * FROM google_auth WHERE user_id = ?').get(String(userId));
     if (!row) return null;
     if (!row.access_token && !row.refresh_token) return null;
     return {
@@ -507,39 +515,39 @@ async function getGoogleTokens(db, userId) {
 
 async function getWebhook(token) {
   if (!sqliteDB) return null;
-  return sqliteDB.prepare('SELECT * FROM webhooks WHERE token = ?').get(token) || null;
+  return getStmt(sqliteDB, 'SELECT * FROM webhooks WHERE token = ?').get(token) || null;
 }
 
 async function createWebhook(userId, name, token, description = '') {
   if (!sqliteDB) return;
-  sqliteDB.prepare(
+  getStmt(sqliteDB,
     'INSERT INTO webhooks (token, user_id, name, description, enabled, created_at) VALUES (?, ?, ?, ?, 1, ?)'
   ).run(token, String(userId), name, description, Math.floor(Date.now() / 1000));
 }
 
 async function removeWebhooks(userId, name) {
   if (!sqliteDB) return false;
-  const info = sqliteDB.prepare('DELETE FROM webhooks WHERE user_id = ? AND name = ?').run(String(userId), name);
+  const info = getStmt(sqliteDB, 'DELETE FROM webhooks WHERE user_id = ? AND name = ?').run(String(userId), name);
   return info.changes > 0;
 }
 
 async function listWebhooksByUser(userId) {
   if (!sqliteDB) return [];
-  return sqliteDB.prepare('SELECT * FROM webhooks WHERE user_id = ? AND enabled = 1').all(String(userId));
+  return getStmt(sqliteDB, 'SELECT * FROM webhooks WHERE user_id = ? AND enabled = 1').all(String(userId));
 }
 
 // ── Audit log ─────────────────────────────────────────────────────────────────
 
 async function logAuditEvent(userId, action, detail = '') {
   if (!sqliteDB) return;
-  sqliteDB.prepare(
+  getStmt(sqliteDB,
     'INSERT INTO audit_log (user_id, action, detail, timestamp) VALUES (?, ?, ?, ?)'
   ).run(String(userId), action, detail, Math.floor(Date.now() / 1000));
 }
 
 async function getAuditLog(userId, limit = 50) {
   if (!sqliteDB) return [];
-  const stmt = sqliteDB.prepare(
+  const stmt = getStmt(sqliteDB,
     'SELECT * FROM audit_log WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?'
   );
   return stmt.all(String(userId), limit);
@@ -550,7 +558,7 @@ async function getAuditLog(userId, limit = 50) {
 async function logAgentGuardMetric(eventType, payload = {}) {
   if (!sqliteDB) return;
   try {
-    sqliteDB.prepare(
+    getStmt(sqliteDB,
       'INSERT INTO agent_guard_metrics (event_type, payload, created_at) VALUES (?, ?, ?)'
     ).run(eventType, JSON.stringify(payload), Math.floor(Date.now() / 1000));
   } catch { /* best-effort */ }
@@ -559,7 +567,7 @@ async function logAgentGuardMetric(eventType, payload = {}) {
 async function logGoogleToolMetric(userId, service, action, status, errorCategory = '') {
   if (!sqliteDB) return;
   try {
-    sqliteDB.prepare(
+    getStmt(sqliteDB,
       'INSERT INTO google_tool_metrics (user_id, service, action, status, error_category, created_at) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(String(userId), service, action, status, errorCategory || null, Math.floor(Date.now() / 1000));
   } catch { /* best-effort */ }
@@ -570,7 +578,7 @@ async function logGoogleToolMetric(userId, service, action, status, errorCategor
 async function cleanupOldRateLimits() {
   if (!sqliteDB) return;
   const cutoff = String(Math.floor(Date.now() / 3600000) * 3600 - 86400 * 7);
-  sqliteDB.prepare('DELETE FROM rate_limits WHERE window_start < ?').run(cutoff);
+  getStmt(sqliteDB, 'DELETE FROM rate_limits WHERE window_start < ?').run(cutoff);
 }
 
 // ── Close database ───────────────────────────────────────────────────────────
