@@ -2,6 +2,15 @@ import { NextResponse } from 'next/server';
 import { getAuthUrl } from '@/lib/google';
 import { verifySignedOAuthState } from '@/lib/oauth-state';
 
+function escapeHtml(unsafe: string): string {
+    return unsafe
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
+}
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const { searchParams } = url;
@@ -29,6 +38,6 @@ export async function GET(request: Request) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error('[Google Auth] Setup incomplete:', message);
         console.error('[Google Auth] Error details:', error);
-        return new NextResponse(`Setup incomplete: ${message}`, { status: 500 });
+        return new NextResponse(`Setup incomplete: ${escapeHtml(message)}`, { status: 500 });
     }
 }
