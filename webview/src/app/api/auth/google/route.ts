@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAuthUrl } from '@/lib/google';
 import { verifySignedOAuthState } from '@/lib/oauth-state';
+import { htmlResponse } from '@/lib/html-response';
 
 export async function GET(request: Request) {
     const url = new URL(request.url);
@@ -9,16 +10,18 @@ export async function GET(request: Request) {
 
     if (!state) {
         console.error('[Google Auth] Missing user state');
-        return new NextResponse('Missing user state', { status: 400 });
+        return htmlResponse('Missing State', 'Missing User State', 'State parameter is missing from the authorization request.', 400);
     }
 
     const stateCheck = verifySignedOAuthState(state);
     if (!stateCheck.ok) {
         console.error('[Google Auth] Invalid OAuth state:', stateCheck.error);
         const isConfigError = /not configured/i.test(stateCheck.error);
-        return new NextResponse(
-            isConfigError ? 'OAuth state verification is not configured on the server.' : 'Invalid or expired OAuth state. Please run /linkgoogle again.',
-            { status: isConfigError ? 500 : 400 }
+        return htmlResponse(
+            'Invalid State',
+            isConfigError ? 'OAuth Verification Not Configured' : 'Invalid or Expired OAuth State',
+            isConfigError ? 'OAuth state verification is not configured on the server.' : 'Please run /linkgoogle again in the bot.',
+            isConfigError ? 500 : 400
         );
     }
 
@@ -29,6 +32,6 @@ export async function GET(request: Request) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error('[Google Auth] Setup incomplete:', message);
         console.error('[Google Auth] Error details:', error);
-        return new NextResponse(`Setup incomplete: ${message}`, { status: 500 });
+        return htmlResponse('Setup Incomplete', 'Setup Incomplete', message, 500);
     }
 }
