@@ -4,6 +4,48 @@ import { verifySignedOAuthState } from '@/lib/oauth-state';
 import * as admin from 'firebase-admin';
 import { htmlResponse } from '@/lib/html-response';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function saveTokensToDatabase(userId: string, tokens: any) {
+    if (!db) {
+        throw new Error('Database not configured');
+    }
+
+    const docRef = db.collection('users').doc(userId).collection('google_auth').doc('tokens');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (tokens.access_token) {
+        updateData.access_token = tokens.access_token;
+    }
+    if (typeof tokens.expiry_date === 'number') {
+        updateData.expiry_date = tokens.expiry_date;
+    }
+    if (tokens.refresh_token) {
+        updateData.refresh_token = tokens.refresh_token;
+    }
+    if (tokens.scope) {
+        updateData.scope = tokens.scope;
+    }
+    if (tokens.token_type) {
+        updateData.token_type = tokens.token_type;
+    }
+
+    await docRef.set(updateData, { merge: true });
+
+    // Verify the save worked
+    const savedDoc = await docRef.get();
+    if (savedDoc.exists) {
+        const savedData = savedDoc.data();
+        if (!savedData || typeof savedData !== 'object') {
+            console.error('[Google Callback] Verification - Document data is undefined or not an object');
+        }
+    } else {
+        console.error('[Google Callback] Verification - Document not found after save!');
+    }
+}
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const { searchParams } = url;
@@ -36,45 +78,11 @@ export async function GET(request: Request) {
         const oauth2Client = getOAuth2Client(url.origin);
         const { tokens } = await oauth2Client.getToken(code);
 
-        if (!db) {
-            console.error('[Google Callback] Firebase DB is not initialized! Could not save tokens.');
+        try {
+            await saveTokensToDatabase(stateCheck.userId, tokens);
+        } catch (dbError) {
+            console.error('[Google Callback] Firebase DB Error:', dbError);
             return htmlResponse('Database Error', 'Database Not Configured', 'Could not save tokens.', 500);
-        }
-
-        const docRef = db.collection('users').doc(stateCheck.userId).collection('google_auth').doc('tokens');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updateData: any = {
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-        };
-
-        if (tokens.access_token) {
-            updateData.access_token = tokens.access_token;
-        }
-        if (typeof tokens.expiry_date === 'number') {
-            updateData.expiry_date = tokens.expiry_date;
-        }
-        if (tokens.refresh_token) {
-            updateData.refresh_token = tokens.refresh_token;
-        }
-        if (tokens.scope) {
-            updateData.scope = tokens.scope;
-        }
-        if (tokens.token_type) {
-            updateData.token_type = tokens.token_type;
-        }
-
-        await docRef.set(updateData, { merge: true });
-
-        // Verify the save worked
-        const savedDoc = await docRef.get();
-        if (savedDoc.exists) {
-            const savedData = savedDoc.data();
-            if (savedData && typeof savedData === 'object') {
-            } else {
-                console.error('[Google Callback] Verification - Document data is undefined or not an object');
-            }
-        } else {
-            console.error('[Google Callback] Verification - Document not found after save!');
         }
 
         // After success, we show a styled success page with a Close button
